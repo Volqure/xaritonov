@@ -14,6 +14,7 @@ FUNCS = {'sin', 'cos', 'tg', 'ctg'}
 token_re = re.compile(r'(\+\+|--|[()+\-*/^!~,]|[a-zA-Zа-яА-Я0-9]+)')
 
 
+# 🔹 токенизация
 def tokenize(expr):
     raw = token_re.findall(expr.replace(' ', ''))
     tokens, prev = [], None
@@ -32,6 +33,31 @@ def tokenize(expr):
     return tokens
 
 
+# 🔹 преобразование функций без скобок
+def normalize_funcs(tokens):
+    res = []
+    i = 0
+
+    while i < len(tokens):
+        t = tokens[i]
+
+        if t in FUNCS:
+            # если дальше нет "(" → добавляем
+            if i + 1 < len(tokens) and tokens[i + 1] != '(':
+                res.append(t)
+                res.append('(')
+                res.append(tokens[i + 1])
+                res.append(')')
+                i += 2
+                continue
+
+        res.append(t)
+        i += 1
+
+    return res
+
+
+# 🔹 проверка
 def validate(tokens):
     if not tokens:
         raise ValueError("Пустое выражение")
@@ -64,6 +90,7 @@ def validate(tokens):
         raise ValueError("Несбалансированные скобки")
 
 
+# 🔹 ОПЗ
 def to_rpn(tokens, debug=False):
     out, stack = [], []
 
@@ -105,6 +132,29 @@ def to_rpn(tokens, debug=False):
     return out
 
 
+def parse(expr, debug=False):
+    tokens = tokenize(expr)
+    tokens = normalize_funcs(tokens)  # 🔹 ключевое место
+    validate(tokens)
+    return ' '.join(to_rpn(tokens, debug))
+
+
+# 🔁 ЦИКЛ ВВОДА
+if __name__ == "__main__":
+    while True:
+        expr = input("\nВведите выражение (или exit): ")
+
+        if expr.lower() == "exit":
+            print("Выход.")
+            break
+
+        try:
+            debug = input("Показать шаги? (y/n): ").lower() == 'y'
+            result = parse(expr, debug)
+            print("ОПЗ:", result)
+
+        except Exception as e:
+            print("Ошибка:", e)
 def parse(expr, debug=False):
     tokens = tokenize(expr)
     validate(tokens)
