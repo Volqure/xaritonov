@@ -43,78 +43,18 @@ def tokenize(expr: str) -> List[str]:
     return tokens
 
 
-def validate(tokens: List[str]) -> None:
-    """Проверяет корректность выражения"""
+def infix_to_rpn(expression: str) -> str:
+    """Преобразует инфиксное выражение в обратную польскую запись"""
+    tokens = tokenize(expression)
+    
     if not tokens:
         raise ValueError("Пустое выражение")
     
-    def is_operand(t: str) -> bool:
-        return t not in ALL_OPS and t not in '()' and t not in FUNCTIONS
+    output = []
+    stack = []
     
-    # Проверка первого и последнего токена
-    if tokens[0] in OPERATORS - {'-'}:
-        raise ValueError(f"Выражение не может начинаться с '{tokens[0]}'")
-    if tokens[0] in POSTFIX_OPS:
-        raise ValueError(f"Постфиксный оператор не может быть в начале")
-    if tokens[-1] in OPERATORS:
-        raise ValueError(f"Выражение не может заканчиваться оператором '{tokens[-1]}'")
-    
-    # Проверка последовательности и скобок
-    balance = 0
-    for i in range(len(tokens)):
-        curr = tokens[i]
-        prev = tokens[i - 1] if i > 0 else None
-        
-        if curr == '(':
-            balance += 1
-            if i + 1 < len(tokens) and tokens[i+1] in POSTFIX_OPS:
-                raise ValueError(f"После '(' не может следовать постфиксный оператор")
-        
-        elif curr == ')':
-            balance -= 1
-            if balance < 0:
-                raise ValueError("Лишняя закрывающая скобка")
-        
-        if prev is None:
-            continue
-            
-        if is_operand(prev) and is_operand(curr):
-            raise ValueError(f"Отсутствует оператор между '{prev}' и '{curr}'")
-        
-        if prev in OPERATORS and curr in OPERATORS:
-            raise ValueError(f"Два бинарных оператора подряд: '{prev}' и '{curr}'")
-        
-        if prev in POSTFIX_OPS and curr in POSTFIX_OPS:
-            raise ValueError(f"Два постфиксных оператора подряд: '{prev}' и '{curr}'")
-        
-        if prev in POSTFIX_OPS and is_operand(curr):
-            raise ValueError(f"После постфиксного оператора '{prev}' должен следовать бинарный оператор")
-        
-        if curr in POSTFIX_OPS:
-            if not (is_operand(prev) or prev == ')'):
-                raise ValueError(f"Постфиксный оператор '{curr}' должен следовать за операндом")
-    
-    if balance != 0:
-        raise ValueError("Несбалансированные скобки")
-
-
-def get_precedence(op: str) -> int:
-    return PRECEDENCE.get(op, 0)
-
-
-def is_right_assoc(op: str) -> bool:
-    return op in RIGHT_ASSOC
-
-
-def shunting_yard(tokens: List[str]) -> str:
-    """Алгоритм сортировочной станции"""
-    output, stack = [], []
-    
-    i = 0
-    while i < len(tokens):
-        token = tokens[i]
-        
-        # Операнды
+    for i, token in enumerate(tokens):
+        # Операнды (числа, переменные)
         if token not in ALL_OPS and token not in '()' and token not in FUNCTIONS:
             output.append(token)
         
@@ -122,33 +62,26 @@ def shunting_yard(tokens: List[str]) -> str:
         elif token in FUNCTIONS:
             stack.append(token)
         
-        # Постфиксные операторы - НЕ добавляем сразу, а сохраняем для текущего операнда
+        # Постфиксные операторы - добавляем к предыдущему операнду
         elif token in POSTFIX_OPS:
-            # Проверяем, есть ли операнд в output
-            if output and output[-1] not in POSTFIX_OPS:
-                # Временно сохраняем постфиксный оператор, чтобы добавить после следующего операнда?
-                # Нет, добавляем его в специальный стек для постфиксных операторов
-                stack.append(('postfix', token))
-            else:
-                raise ValueError(f"Постфиксный оператор '{token}' не может быть применён")
+            # Постфиксный оператор должен идти после операнда
+            if not output:
+                raise ValueError(f"Постфиксный оператор '{token}' не может быть в начале")
+            # Добавляем сразу после операнда в output
+            output.append(token)
         
         # Левая скобка
         elif token == '(':
-            stack.append(('lparen', token))
+            stack.append(token)
         
         # Правая скобка
         elif token == ')':
-            while stack and stack[-1][0] != 'lparen':
-                if stack[-1][0] == 'postfix':
-                    output.append(stack[-1][1])
-                elif stack[-1][0] == 'operator':
-                    output.append(stack[-1][1])
+            while stack and stack[-1] != '(':
+                output.append(stack.pop())
+            if stack and stack[-1] == '(':
                 stack.pop()
-            if stack and stack[-1][0] == 'lparen':
-                stack.pop()
-            if stack and stack[-1][0] == 'function':
-                output.append(stack[-1][1])
-                stack.pop()
+            if stack and stack[-1] in FUNCTIONS:
+                output.append(stack.pop())
         
         # Операторы
         elif token in OPERATORS:
@@ -157,30 +90,18 @@ def shunting_yard(tokens: List[str]) -> str:
                 token = '~'
             
             # Выталкиваем операторы с бОльшим или равным приоритетом
-            while (stack and stack[-1][0] != 'lparen' and stack[-1][0] != 'function' and
-                   (get_precedence(stack[-1][1]) > get_precedence(token) or
-                    (get_precedence(stack[-1][1]) == get_precedence(token) and not is_right_assoc(token)))):
-                output.append(stack.pop()[1])
-            stack.append(('operator', token))
-        
-        i += 1
+            while (stack and stack[-1] != '(' and stack[-1] not in FUNCTIONS and
+                   (PRECEDENCE.get(stack[-1], 0) > PRECEDENCE.get(token, 0) or
+                    (PRECEDENCE.get(stack[-1], 0) == PRECEDENCE.get(token, 0) and 
+                     token not in RIGHT_ASSOC))):
+                output.append(stack.pop())
+            stack.append(token)
     
-    # Выгружаем оставшиеся операторы из стека
+    # Выгружаем оставшиеся операторы
     while stack:
-        if stack[-1][0] == 'postfix':
-            output.append(stack[-1][1])
-        elif stack[-1][0] == 'operator':
-            output.append(stack[-1][1])
-        stack.pop()
+        output.append(stack.pop())
     
     return ' '.join(output)
-
-
-def infix_to_rpn(expression: str) -> str:
-    """Преобразует инфиксную запись в обратную польскую"""
-    tokens = tokenize(expression)
-    validate(tokens)
-    return shunting_yard(tokens)
 
 
 def main():
@@ -191,10 +112,11 @@ def main():
     # Тесты
     tests = [
         "x +++ x",
-        "x+++x",
+        "x+++x", 
         "x++ + y",
         "x + y++",
         "a! + b",
+        "1+1",
     ]
     
     print("\nТЕСТЫ:")
@@ -204,6 +126,17 @@ def main():
             print(f"{expr:15} -> {result}")
         except Exception as e:
             print(f"{expr:15} -> ОШИБКА: {e}")
+    
+    # Детальный разбор
+    print("\n" + "=" * 60)
+    expr = "x +++ x"
+    tokens = tokenize(expr)
+    print(f"'{expr}' -> токены: {tokens}")
+    print(f"RPN: {infix_to_rpn(expr)}")
+    print("\nПОЧЕМУ ТАК:")
+    print("  x +++ x  ->  x ++ + x")
+    print("  В RPN постфиксный ++ применяется к первому x")
+    print("  Получается: x ++ x +")
 
 
 if __name__ == "__main__":
