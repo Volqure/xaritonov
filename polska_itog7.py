@@ -43,6 +43,12 @@ def infix_to_rpn(expression):
                 raise ValueError("Оператор ++ не может быть в начале выражения")
             if last_token_type not in ['operand', 'rparen']:
                 raise ValueError(f"Оператор ++ должен следовать за операндом или скобкой, позиция {i}")
+            # Проверка: после ++ не может сразу идти операнд
+            j = i + 2
+            while j < n and expression[j] == ' ':
+                j += 1
+            if j < n and (expression[j].isalpha() or expression[j].isdigit() or expression[j] == '('):
+                raise ValueError(f"После оператора ++ должен следовать бинарный оператор, позиция {i}")
             tokens.append('++')
             i += 2
             last_token_type = 'postfix_operator'
@@ -52,6 +58,12 @@ def infix_to_rpn(expression):
                 raise ValueError("Оператор -- не может быть в начале выражения")
             if last_token_type not in ['operand', 'rparen']:
                 raise ValueError(f"Оператор -- должен следовать за операндом или скобкой, позиция {i}")
+            # Проверка: после -- не может сразу идти операнд
+            j = i + 2
+            while j < n and expression[j] == ' ':
+                j += 1
+            if j < n and (expression[j].isalpha() or expression[j].isdigit() or expression[j] == '('):
+                raise ValueError(f"После оператора -- должен следовать бинарный оператор, позиция {i}")
             tokens.append('--')
             i += 2
             last_token_type = 'postfix_operator'
@@ -62,6 +74,12 @@ def infix_to_rpn(expression):
                 raise ValueError("Факториал не может быть в начале выражения")
             if last_token_type not in ['operand', 'rparen']:
                 raise ValueError(f"Факториал должен следовать за операндом или скобкой, позиция {i}")
+            # Проверка: после ! не может сразу идти операнд
+            j = i + 1
+            while j < n and expression[j] == ' ':
+                j += 1
+            if j < n and (expression[j].isalpha() or expression[j].isdigit() or expression[j] == '('):
+                raise ValueError(f"После факториала должен следовать бинарный оператор, позиция {i}")
             tokens.append('!')
             i += 1
             last_token_type = 'postfix_operator'
@@ -112,6 +130,10 @@ def infix_to_rpn(expression):
                 tokens.append(ch)
                 last_token_type = 'rparen'
             elif ch in '+-*/^':
+                # Проверка: два бинарных оператора подряд
+                if last_token_type == 'operator' and ch != '-':
+                    raise ValueError(f"Два бинарных оператора подряд на позиции {i}")
+                
                 if ch == '-':
                     is_unary = (last_token_type is None or
                                last_token_type in ['operator', 'lparen', 'function'])
@@ -129,6 +151,16 @@ def infix_to_rpn(expression):
 
     if last_token_type in ['operator', 'lparen']:
         raise ValueError("Выражение не может заканчиваться бинарным оператором или открывающей скобкой")
+
+    # Дополнительная проверка: два операнда подряд
+    for j in range(len(tokens) - 1):
+        if (tokens[j] not in functions and tokens[j] not in '()+-*/^~++--!' and
+            tokens[j+1] not in functions and tokens[j+1] not in '()+-*/^~++--!' and
+            tokens[j] not in precedence and tokens[j+1] not in precedence and
+            tokens[j] != '~' and tokens[j+1] != '~'):
+            # Проверяем, что это не функция и не постфиксный оператор
+            if tokens[j] not in ['++', '--', '!'] and tokens[j+1] not in ['++', '--', '!']:
+                raise ValueError(f"Отсутствует оператор между {tokens[j]} и {tokens[j+1]}")
 
     output = []
     stack = []
