@@ -51,10 +51,6 @@ def validate(tokens: List[str]) -> None:
     def is_operand(t: str) -> bool:
         return t not in ALL_OPS and t not in '()' and t not in FUNCTIONS
     
-    def can_follow_postfix(prev: str) -> bool:
-        """Проверяет, может ли токен следовать после постфиксного оператора"""
-        return prev in OPERATORS or prev == ')' or prev is None
-    
     # Проверка первого и последнего токена
     if tokens[0] in OPERATORS - {'-'}:
         raise ValueError(f"Выражение не может начинаться с '{tokens[0]}'")
@@ -65,12 +61,16 @@ def validate(tokens: List[str]) -> None:
     
     # Проверка последовательности и скобок
     balance = 0
-    for i, (prev, curr) in enumerate(zip([None] + tokens[:-1], tokens)):
+    for i in range(len(tokens)):
+        curr = tokens[i]
+        prev = tokens[i - 1] if i > 0 else None
+        
         if curr == '(':
             balance += 1
             # После '(' не может быть постфиксного оператора
             if i + 1 < len(tokens) and tokens[i+1] in POSTFIX_OPS:
-                raise ValueError(f"После '(' не может следовать постфиксный оператор")
+                raise ValueError(f"После '(' не может следовать постфиксный оператор '{tokens[i+1]}'")
+        
         elif curr == ')':
             balance -= 1
             if balance < 0:
@@ -80,6 +80,8 @@ def validate(tokens: List[str]) -> None:
             continue
             
         # Проверки для пар токенов
+        
+        # Два операнда подряд
         if is_operand(prev) and is_operand(curr):
             raise ValueError(f"Отсутствует оператор между '{prev}' и '{curr}'")
         
@@ -100,8 +102,8 @@ def validate(tokens: List[str]) -> None:
             if not (is_operand(prev) or prev == ')'):
                 raise ValueError(f"Постфиксный оператор '{curr}' должен следовать за операндом или скобкой, а не за '{prev}'")
         
-        # Бинарный оператор может предшествовать постфиксному (x++ + y) - разрешено!
-        # поэтому убрана проверка prev in OPERATORS and curr in POSTFIX_OPS
+        # Бинарный оператор перед постфиксным - РАЗРЕШЕНО (x++ + x)
+        # поэтому НЕТ проверки if prev in OPERATORS and curr in POSTFIX_OPS
     
     if balance != 0:
         raise ValueError("Несбалансированные скобки")
