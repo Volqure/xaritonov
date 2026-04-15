@@ -1,110 +1,160 @@
-def tokenize(expression):
-    """
-    Токенизация входного выражения
-    Возвращает список токенов
-    """
+def tokenize(expr):
+    """Разбивает выражение на токены"""
     tokens = []
     i = 0
-    n = len(expression)
+    n = len(expr)
     
     while i < n:
-        ch = expression[i]
-        
-        # Пропуск пробелов
-        if ch == ' ':
+        if expr[i] == ' ':
             i += 1
             continue
         
-        # Идентификаторы (буквы и цифры вместе)
-        if ch.isalnum():  # буква или цифра
+        # Идентификаторы (буквы+цифры)
+        if expr[i].isalnum():
             j = i
-            while j < n and expression[j].isalnum():
+            while j < n and expr[j].isalnum():
                 j += 1
-            tokens.append(expression[i:j])
+            tokens.append(expr[i:j])
             i = j
             continue
         
-        # Постфиксные операторы (++, --)
-        if i + 1 < n and expression[i:i+2] in ('++', '--'):
-            tokens.append(expression[i:i+2])
+        # Постфиксные операторы
+        if i + 1 < n and expr[i:i+2] in ('++', '--'):
+            tokens.append(expr[i:i+2])
             i += 2
             continue
         
-        # Операторы и скобки
-        if ch in '+-*/^()!.':
-            tokens.append(ch)
+        # Одиночные символы
+        if expr[i] in '+-*/^()!':
+            tokens.append(expr[i])
             i += 1
             continue
         
-        raise ValueError(f"Неизвестный символ: '{ch}' в позиции {i}")
+        raise ValueError(f"Неизвестный символ: {expr[i]}")
     
     return tokens
 
 
-def validate_tokens(tokens):
-    """
-    Валидация последовательности токенов
-    """
-    if not tokens:
-        raise ValueError("Пустое выражение")
-    
-    # Функции
+def is_operator(tok):
+    """Проверка, является ли токен оператором"""
+    return tok in '+-*/^~'
+
+
+def precedence(op):
+    """Приоритет операторов"""
+    return {'+':1, '-':1, '*':2, '/':2, '^':3, '~':4, '!':5, '++':5, '--':5}.get(op, 0)
+
+
+def is_right_assoc(op):
+    """Правоассоциативные операторы"""
+    return op in ('^', '~', '++', '--')
+
+
+def shunting_yard(tokens):
+    """Алгоритм сортировочной станции"""
+    output = []
+    stack = []
     functions = {'sin', 'cos', 'tg', 'ctg'}
     postfix_ops = {'++', '--', '!'}
     
-    # Операторы
-    operators = {'+', '-', '*', '/', '^'}
-    
-    def is_operand(token):
-        # Операнд: любой токен, который не является оператором и не функцией
-        return (token not in operators and 
-                token not in postfix_ops and 
-                token not in '()' and
-                token not in functions)
-    
-    # Проверка первого токена
-    first = tokens[0]
-    if first in operators:
-        if first != '-':  # унарный минус разрешён
-            raise ValueError(f"Выражение не может начинаться с бинарного оператора '{first}'")
-    if first in postfix_ops:
-        raise ValueError(f"Выражение не может начинаться с постфиксного оператора '{first}'")
-    
-    # Проверка последнего токена
-    last = tokens[-1]
-    if last in operators:
-        raise ValueError(f"Выражение не может заканчиваться оператором '{last}'")
-    
-    # Проверка последовательности
-    balance = 0
-    for i in range(len(tokens)):
-        token = tokens[i]
+    for i, tok in enumerate(tokens):
+        # Операнды (всё, кроме операторов, функций и скобок)
+        if tok not in '+-*/^()' and tok not in postfix_ops and tok not in functions:
+            output.append(tok)
         
-        # Баланс скобок
-        if token == '(':
-            balance += 1
-        elif token == ')':
-            balance -= 1
-            if balance < 0:
-                raise ValueError("Неожиданная закрывающая скобка")
+        # Функции
+        elif tok in functions:
+            stack.append(tok)
         
-        # Проверка соседних токенов
-        if i > 0:
-            prev = tokens[i-1]
+        # Постфиксные операторы
+        elif tok in postfix_ops:
+            output.append(tok)
+        
+        # Левая скобка
+        elif tok == '(':
+            stack.append(tok)
+        
+        # Правая скобка
+        elif tok == ')':
+            while stack and stack[-1] != '(':
+                output.append(stack.pop())
+            stack.pop()  # убираем '('
+            if stack and stack[-1] in functions:
+                output.append(stack.pop())
+        
+        # Операторы
+        elif is_operator(tok) or tok == '-':
+            # Унарный минус
+            if tok == '-' and (i == 0 or tokens[i-1] in '+-*/^(' or tokens[i-1] in functions):
+                tok = '~'
             
-            # Два операнда подряд (без оператора)
-            if is_operand(prev) and is_operand(token):
-                # Исключение: если первый операнд - число, а второй - переменная
-                # это допустимо (например, 2x - подразумевается умножение)
-                # Поэтому не выдаём ошибку
-                pass
-            
-            # Два бинарных оператора подряд
-            if (prev in operators and token in operators):
-                raise ValueError(f"Два оператора подряд: '{prev}' и '{token}'")
-            
-            # Постфиксный оператор перед операндом
-            if prev in postfix_ops and is_operand(token):
+            while (stack and stack[-1] != '(' and 
+                   precedence(stack[-1]) > precedence(tok) or
+                   (precedence(stack[-1]) == precedence(tok) and not is_right_assoc(tok))):
+                output.append(stack.pop())
+            stack.append(tok)
+    
+    # Выгружаем остаток
+    while stack:
+        output.append(stack.pop())
+    
+    return ' '.join(output)
+
+
+def infix_to_rpn(expression):
+    """Основная функция"""
+    tokens = tokenize(expression)
+    
+    # Минимальная проверка скобок
+    if tokens.count('(') != tokens.count(')'):
+        raise ValueError("Несбалансированные скобки")
+    
+    return shunting_yard(tokens)
+
+
+def main():
+    print("Преобразование инфиксной записи в RPN")
+    print("Операторы: + - * / ^ ! ++ --")
+    print("Функции: sin cos tg ctg")
+    print("Переменные: буквы и цифры (например: a, x1, 11aa)")
+    print("=" * 50)
+    
+    test_cases = [
+        "3+4*2/(1-5)",
+        "sin(x)+cos(y)",
+        "x++ + y",
+        "a! + b",
+        "2^3^2",
+        "-5+3",
+        "11aa",
+        "1133",
+        "2x + 3y",
+        "x+^2",
+        "sin(x++x)",
+    ]
+    
+    for expr in test_cases:
+        print(f"\n{expr} -> ", end="")
+        try:
+            print(infix_to_rpn(expr))
+        except Exception as e:
+            print(f"Ошибка: {e}")
+    
+    # Интерактивный режим
+    print("\n" + "=" * 50)
+    while True:
+        expr = input("\nВведите выражение (exit для выхода): ").strip()
+        if expr.lower() == 'exit':
+            break
+        if expr:
+            try:
+                print(f"RPN: {infix_to_rpn(expr)}")
+            except Exception as e:
+                print(f"Ошибка: {e}")
+
+
+if __name__ == "__main__":
+    main()            if prev in postfix_ops and is_operand(token):
                 raise ValueError(f"После постфиксного оператора '{prev}' должен следовать бинарный оператор")
             
             # Постфиксный оператор должен следовать за операндом
