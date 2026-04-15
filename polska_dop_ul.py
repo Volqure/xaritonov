@@ -1,5 +1,4 @@
 def tokenize(expression):
-
     tokens = []
     i = 0
     n = len(expression)
@@ -19,12 +18,10 @@ def tokenize(expression):
             i = j
             continue
 
-
         if i + 1 < n and expression[i:i + 2] in ('++', '--'):
             tokens.append(expression[i:i + 2])
             i += 2
             continue
-
 
         if ch in '+-*/^()!.':
             tokens.append(ch)
@@ -45,7 +42,6 @@ def validate_tokens(tokens):
 
     functions = {'sin', 'cos', 'tg', 'ctg'}
     postfix_ops = {'++', '--', '!'}
-
     operators = {'+', '-', '*', '/', '^'}
 
     def is_operand(token):
@@ -54,7 +50,7 @@ def validate_tokens(tokens):
                 token not in '()' and
                 token not in functions)
 
-
+    # Проверка первого токена
     first = tokens[0]
     if first in operators:
         if first != '-':
@@ -62,28 +58,40 @@ def validate_tokens(tokens):
     if first in postfix_ops:
         raise ValueError(f"Выражение не может начинаться с постфиксного оператора '{first}'")
 
-
+    # Проверка последнего токена
     last = tokens[-1]
     if last in operators:
         raise ValueError(f"Выражение не может заканчиваться оператором '{last}'")
 
-
+    # Проверка последовательности и баланс скобок
     balance = 0
     for i in range(len(tokens)):
         token = tokens[i]
+        
+        # Баланс скобок
+        if token == '(':
+            balance += 1
+        elif token == ')':
+            balance -= 1
+            if balance < 0:
+                raise ValueError("Неожиданная закрывающая скобка")
 
         if i > 0:
             prev = tokens[i - 1]
 
+            # Два операнда подряд (без оператора) - ошибка
             if is_operand(prev) and is_operand(token):
-                pass
+                raise ValueError(f"Отсутствует оператор между '{prev}' и '{token}'")
 
+            # Два бинарных оператора подряд
             if (prev in operators and token in operators):
                 raise ValueError(f"Два оператора подряд: '{prev}' и '{token}'")
 
+            # Постфиксный оператор перед операндом
             if prev in postfix_ops and is_operand(token):
                 raise ValueError(f"После постфиксного оператора '{prev}' должен следовать бинарный оператор")
 
+            # Постфиксный оператор должен следовать за операндом
             if token in postfix_ops and not is_operand(prev) and prev != ')':
                 raise ValueError(f"Постфиксный оператор '{token}' должен следовать за операндом")
 
@@ -104,6 +112,7 @@ def get_precedence(op):
         '!': 6, '++': 6, '--': 6
     }
     return precedence.get(op, 0)
+
 
 def is_right_associative(op):
     right_assoc = {'^', '~', '++', '--'}
@@ -126,21 +135,26 @@ def shunting_yard(tokens):
     while i < len(tokens):
         token = tokens[i]
 
+        # Операнды (числа и переменные)
         if (token not in operators and
                 token not in postfix_ops and
                 token not in '()' and
                 token not in functions):
             output.append(token)
 
+        # Функции
         elif token in functions:
             stack.append(token)
 
+        # Постфиксные операторы
         elif token in postfix_ops:
             output.append(token)
 
+        # Левая скобка
         elif token == '(':
             stack.append(token)
 
+        # Правая скобка
         elif token == ')':
             while stack and stack[-1] != '(':
                 output.append(stack.pop())
@@ -149,7 +163,9 @@ def shunting_yard(tokens):
             if stack and stack[-1] in functions:
                 output.append(stack.pop())
 
+        # Операторы
         elif token in operators:
+            # Обработка унарного минуса
             if token == '-':
                 is_unary = (i == 0 or
                             tokens[i - 1] in operators or
@@ -158,6 +174,7 @@ def shunting_yard(tokens):
                 if is_unary:
                     token = '~'
 
+            # Выталкиваем операторы с бОльшим или равным приоритетом
             while (stack and stack[-1] != '(' and
                    stack[-1] not in functions and
                    (get_precedence(stack[-1]) > get_precedence(token) or
@@ -167,6 +184,10 @@ def shunting_yard(tokens):
             stack.append(token)
 
         i += 1
+
+    # ВАЖНО: Выгружаем оставшиеся операторы из стека
+    while stack:
+        output.append(stack.pop())
 
     return ' '.join(output)
 
@@ -188,7 +209,28 @@ def main():
     print("\nПоддерживаемые операторы: +, -, *, /, ^, !, ++, --")
     print("Поддерживаемые функции: sin, cos, tg, ctg")
     print("=" * 60)
-
+    
+    # Тестовые примеры
+    print("\nТЕСТЫ:")
+    test_cases = [
+        "1+1",
+        "2+3*4",
+        "A+B*C",
+        "2+3+4",
+        "sin(x)",
+        "x++ + y",
+        "a! + b",
+    ]
+    
+    for expr in test_cases:
+        try:
+            result = infix_to_rpn(expr)
+            print(f"{expr:15} -> {result}")
+        except Exception as e:
+            print(f"{expr:15} -> Ошибка: {e}")
+    
+    # Интерактивный режим
+    print("\n" + "=" * 60)
     while True:
         try:
             user_input = input("\nВведите выражение: ").strip()
