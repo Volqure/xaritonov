@@ -1,226 +1,275 @@
-# =============================================================================
-# TOKEN_REGISTRY — единственное место, где описаны все токены.
-#
-# Поля каждого токена:
-#   'type'       : 'binary' | 'unary' | 'bracket' | 'skip'
-#   'priority'   : int  (для операторов)
-#   'symbol'     : str  (отображение в RPN, если отличается от ключа)
-#   'reserved'   : bool (нельзя использовать как имя переменной)
-#   'rpn_action' : callable(token, output, operators)
-#   'drain_ok'   : bool — можно ли вытолкнуть в финале (False = незакрытая скобка)
-# =============================================================================
+class ExpressionParser:
+    """Парсер математических выражений с поддержкой функций и операторов"""
+    
+    def __init__(self):
+        # Приоритеты операторов (чем выше, тем важнее)
+        self.precedence = {
+            '+': 1, '-': 1,
+            '*': 2, '/': 2,
+            '^': 3,
+            '~': 4,  # унарный минус
+        }
+        
+        # Ассоциативность: 'L' - левая, 'R' - правая
+        self.associativity = {
+            '+': 'L', '-': 'L',
+            '*': 'L', '/': 'L',
+            '^': 'R',
+            '~': 'R',
+        }
+        
+        # Список поддерживаемых функций
+        self.functions = {'sin', 'cos', 'tg', 'ctg', 'ln', 'log', 'sqrt', 'abs'}
+        
+        # Постфиксные операторы
+        self.postfix_ops = {'!', '++', '--'}
+        
+        # Все операторы
+        self.all_ops = set(self.precedence.keys()) | self.postfix_ops
+        
+    def tokenize(self, expression):
+        """Разбивает выражение на токены"""
+        tokens = []
+        i = 0
+        n = len(expression)
+        
+        while i < n:
+            ch = expression[i]
+            
+            # Пропускаем пробелы
+            if ch == ' ':
+                i += 1
+                continue
+            
+            # Числа (целые и десятичные)
+            if ch.isdigit() or ch == '.':
+                j = i
+                has_dot = False
+                while j < n and (expression[j].isdigit() or expression[j] == '.'):
+                    if expression[j] == '.':
+                        if has_dot:
+                            raise ValueError(f"Некорректное число: {expression[i:j+1]}")
+                        has_dot = True
+                    j += 1
+                tokens.append(('number', expression[i:j]))
+                i = j
+                continue
+            
+            # Переменные и функции
+            if ch.isalpha():
+                j = i
+                while j < n and expression[j].isalpha():
+                    j += 1
+                name = expression[i:j]
+                
+                # Проверяем, является ли это функцией
+                if name in self.functions:
+                    tokens.append(('function', name))
+                else:
+                    tokens.append(('variable', name))
+                i = j
+                continue
+            
+            # Постфиксные операторы (++, --, !)
+            if i + 1 < n and expression[i:i+2] in {'++', '--'}:
+                tokens.append(('postfix', expression[i:i+2]))
+                i += 2
+                continue
+            
+            if ch == '!':
+                tokens.append(('postfix', '!'))
+                i += 1
+                continue
+            
+            # Скобки
+            if ch == '(':
+                tokens.append(('lparen', '('))
+                i += 1
+                continue
+            
+            if ch == ')':
+                tokens.append(('rparen', ')'))
+                i += 1
+                continue
+            
+            # Бинарные операторы и унарный минус
+            if ch in {'+', '-', '*', '/', '^'}:
+                # Определяем, является ли минус унарным
+                is_unary = (ch == '-' and 
+                           (not tokens or 
+                            tokens[-1][0] in {'operator', 'lparen', 'function'}))
+                
+                if is_unary:
+                    tokens.append(('operator', '~'))
+                else:
+                    tokens.append(('operator', ch))
+                i += 1
+                continue
+            
+            raise ValueError(f"Неизвестный символ: '{ch}' на позиции {i}")
+        
+        return tokens
+    
+    def validate_expression(self, tokens):
+        """Проверяет корректность последовательности токенов"""
+        if not tokens:
+            raise ValueError("Пустое выражение")
+        
+        # Проверяем первый и последний токен
+        first_type = tokens[0][0]
+        if first_type in {'operator', 'postfix', 'rparen'}:
+            raise ValueError(f"Выражение не может начинаться с {tokens[0][1]}")
+        
+        last_type = tokens[-1][0]
+        if last_type in {'operator', 'lparen'}:
+            raise ValueError(f"Выражение не может заканчиваться на {tokens[-1][1]}")
+        
+        # Проверяем последовательность токенов
+        balance = 0
+        for i, (tok_type, tok_val) in enumerate(tokens):
+            # Проверка скобок
+            if tok_type == 'lparen':
+                balance += 1
+            elif tok_type == 'rparen':
+                balance -= 1
+                if balance < 0:
+                    raise ValueError("Неожиданная закрывающая скобка")
+            
+            # Проверка корректности соседних токенов
+            if i > 0:
+                prev_type, prev_val = tokens[i-1]
+                
+                # Оператор не может идти после оператора (кроме унарного минуса)
+                if tok_type == 'operator' and prev_type == 'operator':
+                    raise ValueError(f"Два оператора подряд: {prev_val} и {tok_val}")
+                
+                # Постфиксный оператор должен идти после операнда или закрывающей скобки
+                if tok_type == 'postfix':
+                    if prev_type not in {'number', 'variable', 'rparen'}:
+                        raise ValueError(f"Постфиксный оператор {tok_val} должен следовать за операндом")
+                    
+                    # Постфиксный оператор не может быть перед операндом
+                    if i + 1 < len(tokens) and tokens[i+1][0] in {'number', 'variable', 'lparen', 'function'}:
+                        raise ValueError(f"После постфиксного оператора {tok_val} должен следовать бинарный оператор")
+                
+                # Функция должна быть перед открывающей скобкой или переменной
+                if tok_type == 'function':
+                    if i + 1 >= len(tokens) or tokens[i+1][0] != 'lparen':
+                        # Если нет скобок, то считаем, что функция применяется к следующему токену
+                        # Это нормально для sin x (без скобок)
+                        pass
+        
+        if balance != 0:
+            raise ValueError("Несбалансированные скобки")
+        
+        return True
+    
+    def infix_to_rpn(self, tokens):
+        """Преобразует инфиксную запись в обратную польскую"""
+        output = []
+        stack = []
+        
+        for tok_type, tok_val in tokens:
+            if tok_type in {'number', 'variable'}:
+                output.append(tok_val)
+            
+            elif tok_type == 'function':
+                stack.append(('function', tok_val))
+            
+            elif tok_type == 'lparen':
+                stack.append(('lparen', '('))
+            
+            elif tok_type == 'rparen':
+                while stack and stack[-1][0] != 'lparen':
+                    output.append(stack.pop()[1])
+                if stack and stack[-1][0] == 'lparen':
+                    stack.pop()
+                if stack and stack[-1][0] == 'function':
+                    output.append(stack.pop()[1])
+            
+            elif tok_type == 'postfix':
+                # Постфиксные операторы сразу идут в выход
+                output.append(tok_val)
+            
+            elif tok_type == 'operator':
+                # Обрабатываем операторы с учётом приоритета и ассоциативности
+                while (stack and stack[-1][0] == 'operator' and 
+                       stack[-1][1] != '(' and
+                       ((self.associativity[tok_val] == 'L' and 
+                         self.precedence[stack[-1][1]] >= self.precedence[tok_val]) or
+                        (self.associativity[tok_val] == 'R' and 
+                         self.precedence[stack[-1][1]] > self.precedence[tok_val]))):
+                    output.append(stack.pop()[1])
+                stack.append(('operator', tok_val))
+        
+        # Выгружаем оставшиеся операторы из стека
+        while stack:
+            if stack[-1][0] == 'lparen':
+                raise ValueError("Несбалансированные скобки")
+            output.append(stack.pop()[1])
+        
+        return ' '.join(output)
+    
+    def parse(self, expression):
+        """Основной метод для парсинга выражения"""
+        # Токенизация
+        tokens = self.tokenize(expression)
+        
+        # Валидация
+        self.validate_expression(tokens)
+        
+        # Преобразование в RPN
+        rpn = self.infix_to_rpn(tokens)
+        
+        return rpn
 
-def _action_operand(token, output, operators):
-    output.append(token)
 
-def _action_unary(token, output, operators):
-    while operators and _is_unary(operators[-1]):
-        output.append(operators.pop())
-    operators.append(token)
-
-def _action_binary(token, output, operators):
-    while (operators and
-           operators[-1] != '(' and
-           (_is_unary(operators[-1]) or
-            (_is_binary(operators[-1]) and
-             get_priority(operators[-1]) >= get_priority(token)))):
-        output.append(operators.pop())
-    operators.append(token)
-
-def _action_open(token, output, operators):
-    operators.append(token)
-
-def _action_close(token, output, operators):
-    while operators and operators[-1] != '(':
-        output.append(operators.pop())
-    if not operators:
-        raise ValueError("Несбалансированные скобки: лишняя ')'")
-    operators.pop()
-
-
-TOKEN_REGISTRY = {
-    '+':  {'type': 'binary',  'priority': 1,                  'rpn_action': _action_binary, 'drain_ok': True},
-    '-':  {'type': 'binary',  'priority': 1,                  'rpn_action': _action_binary, 'drain_ok': True},
-    '*':  {'type': 'binary',  'priority': 2,                  'rpn_action': _action_binary, 'drain_ok': True},
-    '/':  {'type': 'binary',  'priority': 2,                  'rpn_action': _action_binary, 'drain_ok': True},
-    '^':  {'type': 'binary',  'priority': 3,                  'rpn_action': _action_binary, 'drain_ok': True},
-    'u-': {'type': 'unary',   'priority': 4, 'symbol': '~',
-           'reserved': True,                 'rpn_action': _action_unary,  'drain_ok': True},
-    '(':  {'type': 'bracket',               'rpn_action': _action_open,   'drain_ok': False},
-    ')':  {'type': 'bracket',               'rpn_action': _action_close,  'drain_ok': True},
-    ' ':  {'type': 'skip'},
-}
-
-# ---------------------------------------------------------------------------
-# Вспомогательные функции — только из реестра
-# ---------------------------------------------------------------------------
-
-def get_priority(token):  return TOKEN_REGISTRY.get(token, {}).get('priority', 0)
-def _is_type(token, t):   return TOKEN_REGISTRY.get(token, {}).get('type') == t
-def _is_binary(token):    return _is_type(token, 'binary')
-def _is_unary(token):     return _is_type(token, 'unary')
-def is_operator(token):   return _is_binary(token) or _is_unary(token)
-def is_reserved(word):    return TOKEN_REGISTRY.get(word, {}).get('reserved', False)
-def token_symbol(token):  return TOKEN_REGISTRY.get(token, {}).get('symbol', str(token))
-def _drain_ok(token):     return TOKEN_REGISTRY.get(token, {}).get('drain_ok', True)
-
-def is_operand(token):
-    return isinstance(token, (int, float)) or (
-        isinstance(token, str) and token not in TOKEN_REGISTRY
-    )
-
-# ---------------------------------------------------------------------------
-# Валидаторы контекста — вынесены из ридеров, вызываются явно
-# ---------------------------------------------------------------------------
-
-def _check_operand_sequence(tokens):
-    if tokens and is_operand(tokens[-1]):
-        raise ValueError("Два операнда подряд без оператора между ними")
-
-def _check_reserved(var, _tokens):
-    if is_reserved(var):
-        raise ValueError(f"Имя '{var}' зарезервировано, используйте другое имя")
-
-def _check_double_unary(tokens):
-    if tokens and tokens[-1] == 'u-':
-        raise ValueError("Недопустимый двойной унарный минус '--'")
-
-def _check_binary_position(ch, tokens):
-    if _is_binary(ch) and ch != '-' and (
-        not tokens or tokens[-1] == '(' or is_operator(tokens[-1])
-    ):
-        raise ValueError(f"Оператор '{ch}' не может стоять в позиции операнда")
-
-def _check_close_paren(ch, tokens):
-    if ch == ')' and tokens and (is_operator(tokens[-1]) or tokens[-1] == '('):
-        raise ValueError("Пустые скобки или отсутствует операнд перед ')'")
-
-# ---------------------------------------------------------------------------
-# Ридеры символов
-# ---------------------------------------------------------------------------
-
-def _read_number(expression, i, tokens):
-    _check_operand_sequence(tokens)
-    num_start = i
-    num, dot_count = '', 0
-    while i < len(expression) and (expression[i].isdigit() or expression[i] == '.'):
-        dot_count += (expression[i] == '.')
-        if dot_count > 1:
-            raise ValueError(f"Некорректный формат числа: '{expression[num_start:i+1]}'")
-        num += expression[i]
-        i += 1
-    if num == '.':
-        raise ValueError("Некорректный формат числа: '.'")
-    if i < len(expression) and expression[i].isalpha():
-        raise ValueError(f"Недопустимый символ '{expression[i]}' после числа")
-    return (float if '.' in num else int)(num), i
-
-def _read_variable(expression, i, tokens):
-    _check_operand_sequence(tokens)
-    var = ''
-    while i < len(expression) and expression[i].isalpha():
-        var += expression[i]
-        i += 1
-    _check_reserved(var, tokens)
-    return var, i
-
-def _read_unary_minus(expression, i, tokens):
-    _check_double_unary(tokens)
-    return 'u-', i + 1
-
-def _read_registry_token(expression, i, tokens):
-    ch = expression[i]
-    _check_binary_position(ch, tokens)
-    _check_close_paren(ch, tokens)
-    return ch, i + 1
-
-# Таблица диспетчеризации tokenize: предикат → ридер
-_CHAR_DISPATCH = [
-    (lambda ch, tok: ch.isdigit() or ch == '.',                        _read_number),
-    (lambda ch, tok: ch.isalpha(),                                      _read_variable),
-    (lambda ch, tok: ch == '-' and (
-        not tok or tok[-1] == '(' or is_operator(tok[-1])),             _read_unary_minus),
-    (lambda ch, tok: ch in TOKEN_REGISTRY,                              _read_registry_token),
-]
-
-def tokenize(expression):
-    tokens, i = [], 0
-    while i < len(expression):
-        ch = expression[i]
-        # Пробел — в реестре как 'skip', просто двигаем i
-        if TOKEN_REGISTRY.get(ch, {}).get('type') == 'skip':
-            i += 1
-            continue
-        for predicate, reader in _CHAR_DISPATCH:
-            if predicate(ch, tokens):
-                token, i = reader(expression, i, tokens)
-                tokens.append(token)
-        else:
-            raise ValueError(f"Недопустимый символ: '{ch}'")
-    return tokens
-
-# ---------------------------------------------------------------------------
-# Алгоритм сортировочной станции
-# ---------------------------------------------------------------------------
-
-def _drain_operators(operators, output):
-    """Выталкивает остаток стека в output; незакрытая '(' → ошибка."""
-    while operators:
-        op = operators.pop()
-        if not _drain_ok(op):
-            raise ValueError("Несбалансированные скобки: лишняя '('")
-        output.append(op)
-
-def infix_to_rpn(expression):
-    tokens = tokenize(expression)
-    output, operators = [], []
-
-    for token in tokens:
-        action = TOKEN_REGISTRY.get(token, {}).get('rpn_action', _action_operand)
-        action(token, output, operators)
-
-    _drain_operators(operators, output)
-
-    if tokens and is_operator(tokens[-1]):
-        raise ValueError(
-            f"Выражение заканчивается на оператор '{tokens[-1]}' — отсутствует правый операнд"
-        )
-
-    return output
-
-# ---------------------------------------------------------------------------
-# Вывод
-# ---------------------------------------------------------------------------
-
-def rpn_to_string(rpn_tokens):
-    return ' '.join(token_symbol(t) for t in rpn_tokens)
-
-# ---------------------------------------------------------------------------
-# Точка входа
-# ---------------------------------------------------------------------------
-
-if __name__ == "__main__":
+def main():
+    parser = ExpressionParser()
+    
     print("=" * 60)
-    print("КОНВЕРТЕР В ОБРАТНУЮ ПОЛЬСКУЮ ЗАПИСЬ (ОПЗ)")
+    print("Преобразователь инфиксной записи в обратную польскую (RPN)")
     print("=" * 60)
-    print("Поддерживаемые операции: +, -, *, /, ^ (степень)")
-    print("Операнды: числа и переменные (x, y, ab, ...)")
-    print("Унарный минус: -(x), -y")
-    print("Для выхода введите: exit или q")
+    print("\nПоддерживаемые возможности:")
+    print("  • Числа: целые и десятичные (например: 42, 3.14)")
+    print("  • Переменные: буквы латинского алфавита (a-z, A-Z)")
+    print("  • Бинарные операторы: +, -, *, /, ^")
+    print("  • Унарный минус: - (автоматически распознаётся)")
+    print("  • Постфиксные операторы: ! (факториал), ++, --")
+    print("  • Функции: sin, cos, tg, ctg, ln, log, sqrt, abs")
+    print("  • Функции можно использовать как со скобками, так и без (например: sin x)")
+    print("\nПримеры корректных выражений:")
+    print("  • 2 + 3 * 4")
+    print("  • sin(30) + cos 45")
+    print("  • x++ + y")
+    print("  • a! + b")
+    print("  • -5 + 3")
+    print("  • 2 ^ 3 ^ 2")
+    print("\nПримеры НЕкорректных выражений (будут отклонены):")
+    print("  • sin(x++x)  # нет оператора между ++ и x")
+    print("  • x+^2       # два оператора подряд")
+    print("  • +5         # выражение не может начинаться с оператора")
     print("=" * 60)
-
+    
     while True:
         try:
-            expr = input("\nВведите выражение: ").strip()
-            if expr.lower() in ('exit', 'q', 'quit', 'выход'):
+            expr = input("\nВведите выражение (или 'exit' для выхода): ").strip()
+            
+            if expr.lower() == 'exit':
                 print("До свидания!")
                 break
+            
             if not expr:
                 continue
-            rpn = infix_to_rpn(expr)
-            print(f"Постфиксная (ОПЗ): {rpn_to_string(rpn)}")
+            
+            rpn = parser.parse(expr)
+            print(f"RPN: {rpn}")
+            
         except ValueError as e:
             print(f"Ошибка: {e}")
-        except KeyboardInterrupt:
-            print("\nДо свидания!")
-            break
+        except Exception as e:
+            print(f"Неожиданная ошибка: {e}")
+
+
+if __name__ == "__main__":
+    main()
