@@ -1,6 +1,3 @@
-import math
-
-
 def infix_to_rpn(expression):
 
     precedence = {
