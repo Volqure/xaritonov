@@ -1,72 +1,213 @@
 public class Conveyer {
-    static Object[] qA=new Object[5], qB=new Object[5], qC=new Object[5], qD=new Object[5];
-    static int aP=0,aT=0,aS=0, bP=0,bT=0,bS=0, cP=0,cT=0,cS=0, dP=0,dT=0,dS=0;
-    static int prodCount=0;
-    static volatile boolean run=true;
+    // Очереди для деталей (массивы)
+    static Object[] queueA = new Object[5];
+    static Object[] queueB = new Object[5];
+    static Object[] queueC = new Object[5];
+    static Object[] queueD = new Object[5];
     
-    synchronized static void put(Object[] q, int[] p, int[] s, String name, int time) throws Exception {
-        while(s[0]==5) { System.out.print(" ["+name+" очередь полна]"); wait(); }
-        q[p[0]]=new Object(); 
-        p[0]=(p[0]+1)%5; 
-        s[0]++;
-        System.out.print(" +"+name+"("+s[0]+"/5)");
-        Thread.sleep(time);
+    // Индексы для очереди A
+    static int aPut = 0, aTake = 0, aSize = 0;
+    // Индексы для очереди B
+    static int bPut = 0, bTake = 0, bSize = 0;
+    // Индексы для очереди C
+    static int cPut = 0, cTake = 0, cSize = 0;
+    // Индексы для очереди D
+    static int dPut = 0, dTake = 0, dSize = 0;
+    
+    static int productCount = 0;
+    static boolean running = true;
+    
+    // Счетчики произведенных деталей
+    static int totalA = 0, totalB = 0, totalC = 0, totalD = 0;
+    
+    synchronized static void putA() throws InterruptedException {
+        while (aSize == 5) {
+            System.out.println("[A] Очередь заполнена, ожидание...");
+            wait();
+        }
+        queueA[aPut] = new Object();
+        aPut = (aPut + 1) % 5;
+        aSize++;
+        totalA++;
+        System.out.println("[A] Произведена деталь A #" + totalA + " | Очередь: " + aSize + "/5");
         notifyAll();
     }
     
-    synchronized static Object take(Object[] q, int[] t, int[] s, String name) throws Exception {
-        while(s[0]==0) wait();
-        Object o=q[t[0]]; 
-        t[0]=(t[0]+1)%5; 
-        s[0]--;
-        System.out.print(" -"+name+"("+s[0]+"/5)");
+    synchronized static void putC() throws InterruptedException {
+        while (cSize == 5) {
+            System.out.println("[C] Очередь заполнена, ожидание...");
+            wait();
+        }
+        queueC[cPut] = new Object();
+        cPut = (cPut + 1) % 5;
+        cSize++;
+        totalC++;
+        System.out.println("[C] Произведена деталь C #" + totalC + " | Очередь: " + cSize + "/5");
         notifyAll();
-        return o;
     }
     
-    synchronized static int size(int[] s) { return s[0]; }
+    synchronized static void putD() throws InterruptedException {
+        while (dSize == 5) {
+            System.out.println("[D] Очередь заполнена, ожидание...");
+            wait();
+        }
+        queueD[dPut] = new Object();
+        dPut = (dPut + 1) % 5;
+        dSize++;
+        totalD++;
+        System.out.println("[D] Произведена деталь D #" + totalD + " | Очередь: " + dSize + "/5");
+        notifyAll();
+    }
     
-    public static void main(String[] args) throws Exception {
-        System.out.println("🏭 КОНВЕЙЕР ЗАПУЩЕН\n");
+    synchronized static void putB() throws InterruptedException {
+        while (bSize == 5) {
+            System.out.println("[B] Очередь заполнена, ожидание...");
+            wait();
+        }
+        queueB[bPut] = new Object();
+        bPut = (bPut + 1) % 5;
+        bSize++;
+        totalB++;
+        System.out.println("[B] Произведена деталь B #" + totalB + " | Очередь: " + bSize + "/5");
+        notifyAll();
+    }
+    
+    synchronized static Object takeA() throws InterruptedException {
+        while (aSize == 0) wait();
+        Object item = queueA[aTake];
+        aTake = (aTake + 1) % 5;
+        aSize--;
+        notifyAll();
+        return item;
+    }
+    
+    synchronized static Object takeB() throws InterruptedException {
+        while (bSize == 0) wait();
+        Object item = queueB[bTake];
+        bTake = (bTake + 1) % 5;
+        bSize--;
+        notifyAll();
+        return item;
+    }
+    
+    synchronized static Object takeC() throws InterruptedException {
+        while (cSize == 0) wait();
+        Object item = queueC[cTake];
+        cTake = (cTake + 1) % 5;
+        cSize--;
+        notifyAll();
+        return item;
+    }
+    
+    synchronized static Object takeD() throws InterruptedException {
+        while (dSize == 0) wait();
+        Object item = queueD[dTake];
+        dTake = (dTake + 1) % 5;
+        dSize--;
+        notifyAll();
+        return item;
+    }
+    
+    public static void main(String[] args) throws InterruptedException {
+        System.out.println("=== ЗАПУСК КОНВЕЙЕРА ===\n");
         
-        new Thread(()->{ while(run){ try{ put(qA,new int[]{aP},new int[]{aS},"A",1000); }catch(Exception e){}} }).start();
-        new Thread(()->{ while(run){ try{ put(qC,new int[]{cP},new int[]{cS},"C",2000); }catch(Exception e){}} }).start();
-        new Thread(()->{ while(run){ try{ put(qD,new int[]{dP},new int[]{dS},"D",1000); }catch(Exception e){}} }).start();
+        // Поток для деталей A (1 сек)
+        Thread threadA = new Thread(() -> {
+            while (running) {
+                try {
+                    Thread.sleep(1000);
+                    putA();
+                } catch (InterruptedException e) {}
+            }
+        });
         
-        new Thread(()->{ 
-            while(run){ 
-                try{ 
-                    synchronized(Conveyer.class){
-                        if(size(new int[]{cS})>0 && size(new int[]{dS})>0 && size(new int[]{bS})<5){
-                            take(qC,new int[]{cT},new int[]{cS},"C");
-                            take(qD,new int[]{dT},new int[]{dS},"D");
+        // Поток для деталей C (2 сек)
+        Thread threadC = new Thread(() -> {
+            while (running) {
+                try {
+                    Thread.sleep(2000);
+                    putC();
+                } catch (InterruptedException e) {}
+            }
+        });
+        
+        // Поток для деталей D (1 сек)
+        Thread threadD = new Thread(() -> {
+            while (running) {
+                try {
+                    Thread.sleep(1000);
+                    putD();
+                } catch (InterruptedException e) {}
+            }
+        });
+        
+        // Поток для сборки деталей B из C и D (3 сек)
+        Thread threadB = new Thread(() -> {
+            while (running) {
+                try {
+                    Thread.sleep(100);
+                    synchronized (Conveyer.class) {
+                        if (cSize > 0 && dSize > 0 && bSize < 5) {
+                            takeC();
+                            takeD();
+                            System.out.println("[B] Начало сборки из C и D...");
                             Thread.sleep(3000);
-                            put(qB,new int[]{bP},new int[]{bS},"B",0);
+                            putB();
                         }
                     }
-                    Thread.sleep(100);
-                }catch(Exception e){}
+                } catch (InterruptedException e) {}
             }
-        }).start();
+        });
         
-        new Thread(()->{ 
-            while(run){ 
-                try{ 
-                    synchronized(Conveyer.class){
-                        if(size(new int[]{aS})>0 && size(new int[]{bS})>0){
-                            take(qA,new int[]{aT},new int[]{aS},"A");
-                            take(qB,new int[]{bT},new int[]{bS},"B");
+        // Поток для сборки готового продукта из A и B (2 сек)
+        Thread assembler = new Thread(() -> {
+            while (running) {
+                try {
+                    Thread.sleep(100);
+                    synchronized (Conveyer.class) {
+                        if (aSize > 0 && bSize > 0) {
+                            takeA();
+                            takeB();
+                            System.out.println("[СБОРЩИК] Начало сборки продукта...");
                             Thread.sleep(2000);
-                            System.out.println("\n🎉 ПРОДУКТ #"+(++prodCount)+" ГОТОВ! | A:"+aS+" B:"+bS+" C:"+cS+" D:"+dS);
+                            productCount++;
+                            System.out.println("\n★★★★★ ПРОДУКТ #" + productCount + " СОБРАН ★★★★★");
+                            System.out.println("Очереди: A:" + aSize + "/5 B:" + bSize + "/5 C:" + cSize + "/5 D:" + dSize + "/5\n");
                         }
                     }
-                    Thread.sleep(100);
-                }catch(Exception e){}
+                } catch (InterruptedException e) {}
             }
-        }).start();
+        });
         
-        Thread.sleep(35000);
-        run=false;
-        System.out.println("\n🏁 КОНВЕЙЕР ОСТАНОВЛЕН. Всего продуктов: "+prodCount);
+        // Монитор статистики
+        Thread monitor = new Thread(() -> {
+            while (running) {
+                try {
+                    Thread.sleep(5000);
+                    synchronized (Conveyer.class) {
+                        System.out.println("\n=== СТАТИСТИКА ===");
+                        System.out.println("Произведено: A:" + totalA + " B:" + totalB + " C:" + totalC + " D:" + totalD);
+                        System.out.println("Собрано продуктов: " + productCount);
+                        System.out.println("Очереди: A:" + aSize + " B:" + bSize + " C:" + cSize + " D:" + dSize);
+                        System.out.println("================\n");
+                    }
+                } catch (InterruptedException e) {}
+            }
+        });
+        
+        threadA.start();
+        threadC.start();
+        threadD.start();
+        threadB.start();
+        assembler.start();
+        monitor.start();
+        
+        // Работаем 40 секунд
+        Thread.sleep(40000);
+        running = false;
+        
+        Thread.sleep(1000);
+        System.out.println("\n=== КОНВЕЙЕР ОСТАНОВЛЕН ===");
+        System.out.println("Всего собрано продуктов: " + productCount);
     }
 }
