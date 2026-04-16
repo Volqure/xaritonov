@@ -1,124 +1,72 @@
-class Product { static int c=0; Product(){System.out.println("\n🎉 ПРОДУКТ #"+(++c)+" ГОТОВ!");}}
-class PartA { static int c=0; PartA(){System.out.print(" A"+(++c));} }
-class PartB { static int c=0; PartB(){System.out.print(" B"+(++c));} }
-class PartC { static int c=0; PartC(){System.out.print(" C"+(++c));} }
-class PartD { static int c=0; PartD(){System.out.print(" D"+(++c));} }
-
-class SyncQueue {
-    Object[] arr = new Object[5];
-    int putIdx=0, takeIdx=0, size=0;
+public class Conveyer {
+    static Object[] qA=new Object[5], qB=new Object[5], qC=new Object[5], qD=new Object[5];
+    static int aP=0,aT=0,aS=0, bP=0,bT=0,bS=0, cP=0,cT=0,cS=0, dP=0,dT=0,dS=0;
+    static int prodCount=0;
+    static volatile boolean run=true;
     
-    synchronized void put(Object o) throws InterruptedException {
-        while(size==5) { 
-            System.out.print(" [ОЧЕРЕДЬ ПОЛНА, ОЖИДАНИЕ]"); 
-            wait(); 
-        }
-        arr[putIdx]=o; 
-        putIdx=(putIdx+1)%5; 
-        size++;
-        System.out.print(" +"+o.getClass().getSimpleName()+"("+size+"/5)");
+    synchronized static void put(Object[] q, int[] p, int[] s, String name, int time) throws Exception {
+        while(s[0]==5) { System.out.print(" ["+name+" очередь полна]"); wait(); }
+        q[p[0]]=new Object(); 
+        p[0]=(p[0]+1)%5; 
+        s[0]++;
+        System.out.print(" +"+name+"("+s[0]+"/5)");
+        Thread.sleep(time);
         notifyAll();
     }
     
-    synchronized Object take() throws InterruptedException {
-        while(size==0) { 
-            wait(); 
-        }
-        Object o=arr[takeIdx]; 
-        takeIdx=(takeIdx+1)%5; 
-        size--;
-        System.out.print(" -"+o.getClass().getSimpleName()+"("+size+"/5)");
+    synchronized static Object take(Object[] q, int[] t, int[] s, String name) throws Exception {
+        while(s[0]==0) wait();
+        Object o=q[t[0]]; 
+        t[0]=(t[0]+1)%5; 
+        s[0]--;
+        System.out.print(" -"+name+"("+s[0]+"/5)");
         notifyAll();
         return o;
     }
     
-    synchronized int size() { return size; }
-}
-
-public class AssemblyLine {
-    static SyncQueue qA=new SyncQueue(), qB=new SyncQueue(), qC=new SyncQueue(), qD=new SyncQueue();
-    static volatile boolean run=true;
-    
-    static void sleep(int ms) { try{Thread.sleep(ms);}catch(Exception e){} }
+    synchronized static int size(int[] s) { return s[0]; }
     
     public static void main(String[] args) throws Exception {
         System.out.println("🏭 КОНВЕЙЕР ЗАПУЩЕН\n");
         
-        // Producer A (1 сек)
-        new Thread(()->{ 
-            while(run){ 
-                sleep(1000); 
-                try{ qA.put(new PartA()); }catch(Exception e){}
-            } 
-        }).start();
+        new Thread(()->{ while(run){ try{ put(qA,new int[]{aP},new int[]{aS},"A",1000); }catch(Exception e){}} }).start();
+        new Thread(()->{ while(run){ try{ put(qC,new int[]{cP},new int[]{cS},"C",2000); }catch(Exception e){}} }).start();
+        new Thread(()->{ while(run){ try{ put(qD,new int[]{dP},new int[]{dS},"D",1000); }catch(Exception e){}} }).start();
         
-        // Producer C (2 сек)
-        new Thread(()->{ 
-            while(run){ 
-                sleep(2000); 
-                try{ qC.put(new PartC()); }catch(Exception e){}
-            } 
-        }).start();
-        
-        // Producer D (1 сек)
-        new Thread(()->{ 
-            while(run){ 
-                sleep(1000); 
-                try{ qD.put(new PartD()); }catch(Exception e){}
-            } 
-        }).start();
-        
-        // Producer B из C и D (3 сек)
         new Thread(()->{ 
             while(run){ 
                 try{ 
-                    synchronized(AssemblyLine.class){
-                        if(qC.size()>0 && qD.size()>0 && qB.size()<5){
-                            PartC c = (PartC)qC.take();
-                            PartD d = (PartD)qD.take();
-                            System.out.print("\n🔧 Сборка B из C и D");
-                            sleep(3000);
-                            qB.put(new PartB());
+                    synchronized(Conveyer.class){
+                        if(size(new int[]{cS})>0 && size(new int[]{dS})>0 && size(new int[]{bS})<5){
+                            take(qC,new int[]{cT},new int[]{cS},"C");
+                            take(qD,new int[]{dT},new int[]{dS},"D");
+                            Thread.sleep(3000);
+                            put(qB,new int[]{bP},new int[]{bS},"B",0);
                         }
                     }
-                    sleep(100);
+                    Thread.sleep(100);
                 }catch(Exception e){}
             }
         }).start();
         
-        // Assembler продукта из A и B (2 сек)
         new Thread(()->{ 
             while(run){ 
                 try{ 
-                    synchronized(AssemblyLine.class){
-                        if(qA.size()>0 && qB.size()>0){
-                            qA.take();
-                            qB.take();
-                            System.out.print("\n🔨 Сборка продукта");
-                            sleep(2000);
-                            new Product();
-                            System.out.printf(" | Очереди: A:%d B:%d C:%d D:%d\n", 
-                                qA.size(), qB.size(), qC.size(), qD.size());
+                    synchronized(Conveyer.class){
+                        if(size(new int[]{aS})>0 && size(new int[]{bS})>0){
+                            take(qA,new int[]{aT},new int[]{aS},"A");
+                            take(qB,new int[]{bT},new int[]{bS},"B");
+                            Thread.sleep(2000);
+                            System.out.println("\n🎉 ПРОДУКТ #"+(++prodCount)+" ГОТОВ! | A:"+aS+" B:"+bS+" C:"+cS+" D:"+dS);
                         }
                     }
-                    sleep(100);
+                    Thread.sleep(100);
                 }catch(Exception e){}
             }
         }).start();
         
-        // Монитор статистики
-        new Thread(()->{
-            while(run){
-                sleep(5000);
-                synchronized(AssemblyLine.class){
-                    System.out.printf("\n📊 СТАТИСТИКА | A:%d B:%d C:%d D:%d\n", 
-                        qA.size(), qB.size(), qC.size(), qD.size());
-                }
-            }
-        }).start();
-        
-        Thread.sleep(40000);
+        Thread.sleep(35000);
         run=false;
-        System.out.println("\n🏁 КОНВЕЙЕР ОСТАНОВЛЕН");
+        System.out.println("\n🏁 КОНВЕЙЕР ОСТАНОВЛЕН. Всего продуктов: "+prodCount);
     }
 }
