@@ -1,305 +1,233 @@
-"""Инфикс → RPN. Некорректная запись отсекается до построения постфикса."""
 from __future__ import annotations
-
 from typing import List, Optional
 
-
-# --- реестр операторов (меняете здесь) ----------------------------------------
-class tokenSet:
-    registry: dict[str, "tokenSet"] = {}
-
-    def __init__(self, name: str, arnost: int, prec: int, ass: Optional[str] = None):
-        self.name, self.arnost, self.prec, self.ass = name, arnost, prec, ass
-        tokenSet.registry[name] = self
-
-    @classmethod
-    def register_builtin(cls) -> None:
-        cls.registry.clear()
-        for name, prec, ass in [
-            ("+", 2, "L"),
-            ("-", 2, "L"),
-            ("*", 3, "L"),
-            ("/", 3, "L"),
-            ("^", 4, "R"),
-        ]:
-            tokenSet(name, 2, prec, ass)
-        tokenSet("~", 1, 5, "R")
-        for s in ("!", "++", "--"):
-            tokenSet(s, 1, 6, None)
-        for s in ("sin", "cos", "tg", "ctg"):
-            tokenSet(s, 1, 8, None)
-
-    @classmethod
-    def get(cls, name: str) -> Optional["tokenSet"]:
-        return cls.registry.get(name)
+OPERATORS = [
+    ("+", 2, 2, "L"),
+    ("-", 2, 2, "L"),
+    ("*", 2, 3, "L"),
+    ("/", 2, 3, "L"),
+    ("^", 2, 4, "R"),
+    ("~", 1, 5, "R"),
+    ("!", 1, 6, None),
+    ("++", 1, 6, None),
+    ("--", 1, 6, None),
+    ("sin", 1, 8, None),
+    ("cos", 1, 8, None),
+    ("tg", 1, 8, None),
+    ("ctg", 1, 8, None),
+    ("(", 0, 10, None),
+    (")", 0, 10, None),
+]
 
 
-class Lexer:
-    POSTFIX = frozenset({"++", "--", "!"})
+class Op:
+    reg = {}
 
-    @staticmethod
-    def scan(text: str) -> List[str]:
-        out, i, n = [], 0, len(text)
-        while i < n:
-            c = text[i]
-            if c.isspace():
-                i += 1
-                continue
-            if i + 1 < n and text[i : i + 2] in Lexer.POSTFIX:
-                out.append(text[i : i + 2])
-                i += 2
-                continue
-            if c.isalnum() or c == ".":
-                j = i + 1
-                while j < n and (text[j].isalnum() or text[j] == "."):
-                    j += 1
-                out.append(text[i:j])
-                i = j
-                continue
-            if c in "+-*/^()!":
-                out.append(c)
-                i += 1
-                continue
-            raise ValueError(f"Неизвестный символ: {c!r}")
-        return out
-
-
-class Grammar:
-    """Классификация токенов по operator registry и Lexer.POSTFIX."""
-    TRIG = frozenset({"sin", "cos", "tg", "ctg"})
-    ERR_NEED_BINARY = (
-        "Нужен явный бинарный оператор (+ - * / ^) между «{prev}» и «{curr}» "
-        "(неявное умножение отключено)."
-    )
+    def __init__(self, name: str, arity: int, prec: int, ass: Optional[str] = None):
+        self.name = name
+        self.arity = arity
+        self.prec = prec
+        self.ass = ass
+        Op.reg[name] = self
 
     @classmethod
-    def meta(cls, t: str) -> Optional[tokenSet]:
-        return tokenSet.get(t)
+    def reg_all(cls):
+        cls.reg.clear()
+        for name, arity, prec, ass in OPERATORS:
+            cls(name, arity, prec, ass)
 
     @classmethod
-    def is_lit(cls, t: str) -> bool:
-        return t not in "()" and cls.meta(t) is None
+    def get(cls, name: str) -> Optional[Op]:
+        return cls.reg.get(name)
 
     @classmethod
-    def is_b(cls, t: str) -> bool:
-        m = cls.meta(t)
-        return m is not None and m.arnost == 2
+    def is_binary(cls, t: str) -> bool:
+        op = cls.get(t)
+        return op is not None and op.arity == 2
 
     @classmethod
-    def is_pf(cls, t: str) -> bool:
-        return t in Lexer.POSTFIX
+    def is_prefix(cls, t: str) -> bool:
+        op = cls.get(t)
+        return op is not None and op.arity == 1 and t not in POSTFIX_OPS
 
     @classmethod
-    def is_pr(cls, t: str) -> bool:
-        m = cls.meta(t)
-        return m is not None and m.arnost == 1 and not cls.is_pf(t)
-
-    @classmethod
-    def unary_minus_context(cls, prev: Optional[str]) -> bool:
-        if prev is None or prev == "(":
-            return True
-        if cls.is_pf(prev):
-            return False
-        return cls.is_b(prev) or cls.is_pr(prev)
+    def is_operand(cls, t: str) -> bool:
+        return t not in "()" and cls.get(t) is None
 
 
-class PairRules:
-    """Все локальные ограничения на соседние токены; возвращает текст ошибки или None."""
+def tokenize(expr: str) -> List[str]:
+    tokens, i, n = [], 0, len(expr)
+    while i < n:
+        c = expr[i]
+        if c.isspace():
+            i += 1
+            continue
+        if i + 1 < n and expr[i:i+2] in POSTFIX_OPS:
+            tokens.append(expr[i:i+2])
+            i += 2
+            continue
+        if c.isalnum():
+            j = i + 1
+            while j < n and (expr[j].isalnum()):
+                j += 1
+            tokens.append(expr[i:j])
+            i = j
+            continue
+        if c in "+-*/^()!":
+            tokens.append(c)
+            i += 1
+            continue
+        raise ValueError(f"Неизвестный символ")
+    return tokens
 
-    @staticmethod
-    def check(prev: str, curr: str) -> Optional[str]:
-        g, E = Grammar, Grammar.ERR_NEED_BINARY.format
-        # нельзя «склеивать» факторы без *
-        if g.is_lit(prev) and (
-            g.is_lit(curr) or curr == "(" or g.is_pr(curr)
-        ):
-            return E(prev=prev, curr=curr)
-        if prev == ")" and (
-            curr == "(" or g.is_lit(curr) or g.is_pr(curr)
-        ):
-            return E(prev=prev, curr=curr)
-        if curr in Grammar.TRIG and g.is_lit(prev) and prev not in "()":
-            return E(prev=prev, curr=curr)
-        if g.is_pr(prev) and (g.is_b(curr) or curr == ")" or g.is_pf(curr)):
-            return (
-                f"После «{prev}» должно идти выражение (аргумент), "
-                f"а не «{curr}» — пустой или незавершённый аргумент недопустим."
-            )
-        if g.is_pf(prev) and curr == "(":
-            return (
-                f"После постфиксного «{prev}» нельзя сразу писать «(» — "
-                f"укажите бинарный оператор (+ - * / ^) между частями выражения."
-            )
-        if g.is_b(prev) and g.is_b(curr):
-            return f"Два бинарных оператора подряд: «{prev}» и «{curr}»"
-        if g.is_pf(prev) and g.is_lit(curr):
-            return f"После «{prev}» нужен бинарный оператор, а не операнд «{curr}»"
-        if g.is_pf(curr) and not g.is_lit(prev) and prev != ")":
-            return f"«{curr}» должно следовать сразу за операндом или «)»"
-        return None
-
-
-class StructureValidator:
-    def __init__(self, ts: List[str]):
-        self.ts = ts
-
-    def validate(self) -> None:
-        ts = self.ts
-        if not ts:
-            raise ValueError("Пустое выражение")
-        g = Grammar
-        if g.is_b(ts[0]):
-            raise ValueError(f"Выражение не может начинаться с «{ts[0]}»")
-        if g.is_pf(ts[0]):
-            raise ValueError("Постфиксный оператор не может быть в начале")
-        if g.is_b(ts[-1]):
-            raise ValueError(f"Выражение не может заканчиваться оператором «{ts[-1]}»")
-        if g.is_pr(ts[-1]):
-            raise ValueError(
-                f"После «{ts[-1]}» должно быть выражение (аргумент), нельзя обрывать на операторе."
-            )
-
-        bal = 0
-        for i, curr in enumerate(ts):
-            if curr == "(":
-                bal += 1
-            elif curr == ")":
-                bal -= 1
-                if bal < 0:
-                    raise ValueError("Лишняя закрывающая скобка")
-            if i == 0:
-                continue
-            prev = ts[i - 1]
-            msg = PairRules.check(prev, curr)
-            if msg:
-                raise ValueError(msg)
-        if bal != 0:
-            raise ValueError("Несбалансированные скобки")
-
-
-class RpnShape:
-    """Проверка: постфикс даёт ровно одно значение на стеке."""
-
-    @staticmethod
-    def assert_single(rpn: List[str]) -> None:
-        d = 0
-        for t in rpn:
-            m = tokenSet.get(t)
-            if m is None:
-                d += 1
-            elif m.arnost == 2:
-                if d < 2:
-                    raise ValueError(
-                        f"К бинарному оператору «{t}» в постфиксе не хватает операндов."
-                    )
-                d -= 1
-            else:
-                if d < 1:
-                    raise ValueError(
-                        f"К унарному оператору «{t}» в постфиксе не хватает операнда."
-                    )
-        if d != 1:
-            raise ValueError(
-                "Выражение не сводится к одному значению: в постфиксе получается несколько "
-                "независимых результатов — добавьте недостающие бинарные операторы (+ - * / ^) "
-                "или скобки так, чтобы была одна цельная формула."
-            )
-
-
-class ShuntingYard:
-    """Сортировочная станция (Дейкстры)."""
-
-    @classmethod
-    def _pop_before(cls, top: str, inc: tokenSet) -> bool:
-        if top == "(" or Grammar.is_pr(top):
-            return False
-        st = tokenSet.get(top)
-        if st is None:
-            return False
-        if st.prec > inc.prec:
-            return True
-        if st.prec == inc.prec:
-            return (inc.ass or "L") == "L"
-        return False
-
-    @classmethod
-    def convert(cls, ts: List[str]) -> List[str]:
-        out: List[str] = []
-        st: List[str] = []
-        for tok in ts:
-            if Grammar.is_lit(tok):
-                out.append(tok)
-                while st and Grammar.is_pr(st[-1]):
-                    out.append(st.pop())
-                continue
-            if Grammar.is_pr(tok):
-                st.append(tok)
-                continue
-            if Grammar.is_pf(tok):
-                out.append(tok)
-                continue
-            if tok == "(":
-                st.append(tok)
-                continue
-            if tok == ")":
-                while st and st[-1] != "(":
-                    out.append(st.pop())
-                if not st:
-                    raise ValueError("Непарная скобка")
-                st.pop()
-                while st and Grammar.is_pr(st[-1]):
-                    out.append(st.pop())
-                continue
-
-            inc = tokenSet.get(tok)
-            if inc is None:
-                raise ValueError(f"Неожиданный токен: {tok!r}")
-            while st and cls._pop_before(st[-1], inc):
-                out.append(st.pop())
-            st.append(tok)
-
-        while st:
-            t = st.pop()
-            if t == "(":
-                raise ValueError("Несбалансированные скобки")
-            out.append(t)
-        return out
-
+POSTFIX_OPS = {"++", "--", "!"}
+TRIG_NAMES = {"sin", "cos", "tg", "ctg"}
 
 class InfixToRpn:
-    def __init__(self, expression: str):
-        tokenSet.register_builtin()
-        self._src = expression
-        self.tokens = self._fold_minus(Lexer.scan(expression))
+    def __init__(self, expr: str):
+        Op.reg_all()
+        self.source = expr
+        raw = tokenize(expr)
+        self.tokens = self._fold_unary(raw)
 
-    def debug_snapshot(self) -> str:
-        return f"исходник={self._src!r}\nтокены={self.tokens}"
+    def _fold_unary(self, tokens: List[str]) -> List[str]:
+        res = []
 
-    @staticmethod
-    def _fold_minus(ts: List[str]) -> List[str]:
-        g, r = Grammar, []
-        for t in ts:
-            if t != "-":
-                r.append(t)
+        for i, t in enumerate(tokens):
+            if t != '-':
+                res.append(t)
                 continue
-            p = r[-1] if r else None
-            r.append("~" if (p == "(" or g.unary_minus_context(p)) else "-")
-        return r
+            prev = res[-1] if res else None
+            if prev is None or prev == '(' or Op.is_binary(prev) or Op.is_prefix(prev):
+                res.append('~')
+            else:
+                res.append('-')
+        return res
 
-    def _build(self) -> str:
-        StructureValidator(self.tokens).validate()
-        rpn = ShuntingYard.convert(self.tokens)
-        RpnShape.assert_single(rpn)
-        return " ".join(rpn)
+    def _validate(self) -> None:
+        ts = self.tokens
+        if not ts:
+            raise ValueError("Пустое выражение")
+
+        if Op.is_binary(ts[0]):
+            raise ValueError(f"Нельзя начинать с «{ts[0]}»")
+        if ts[0] in POSTFIX_OPS:
+            raise ValueError("Постфиксный оператор не может быть в начале")
+
+        if Op.is_binary(ts[-1]):
+            raise ValueError(f"Нельзя заканчивать оператором «{ts[-1]}»")
+        if Op.is_prefix(ts[-1]):
+            raise ValueError(f"После «{ts[-1]}» должно быть выражение")
+
+        balance = 0
+        for i, curr in enumerate(ts):
+            if curr == '(':
+                balance += 1
+            elif curr == ')':
+                balance -= 1
+                if balance < 0:
+                    raise ValueError("Лишняя ')'")
+            if i == 0:
+                continue
+
+            prev = ts[i-1]
+
+            if Op.is_operand(prev) and (Op.is_operand(curr) or curr == '(' or Op.is_prefix(curr)):
+                raise ValueError(f"Нужен оператор между «{prev}» и «{curr}»")
+            if prev == ')' and (curr == '(' or Op.is_operand(curr) or Op.is_prefix(curr)):
+                raise ValueError(f"Нужен оператор между «{prev}» и «{curr}»")
+
+            if prev in POSTFIX_OPS and curr == '(':
+                raise ValueError(f"После «{prev}» нужен оператор, а не «(»")
+
+            if curr in TRIG_NAMES and not (prev in '()' or Op.get(prev)):
+                raise ValueError(f"Нужен оператор между «{prev}» и «{curr}»")
+
+            if Op.is_prefix(prev) and (Op.is_binary(curr) or curr == ')' or curr in POSTFIX_OPS):
+                raise ValueError(f"После «{prev}» нужно выражение, а не «{curr}»")
+
+            if prev in POSTFIX_OPS and Op.is_binary(curr):
+                raise ValueError("некорректная запись")
+
+            if Op.is_binary(prev) and Op.is_binary(curr):
+                raise ValueError(f"Два бинарных подряд: «{prev}» и «{curr}»")
+
+            if curr in POSTFIX_OPS and not (Op.is_operand(prev) or prev == ')'):
+                raise ValueError(f"некорректная запись")
+
+        if balance != 0:
+            raise ValueError("Несбалансированные скобки")
 
     def to_rpn(self) -> str:
-        return self._build()
+        self._validate()
+        output, stack = [], []
 
+        for tok in self.tokens:
+            if Op.is_operand(tok):
+                output.append(tok)
+                while stack and Op.is_prefix(stack[-1]):
+                    output.append(stack.pop())
+                continue
 
-def main() -> None:
+            if Op.is_prefix(tok):
+                stack.append(tok)
+                continue
+
+            if tok in POSTFIX_OPS:
+                output.append(tok)
+                continue
+
+            if tok == '(':
+                stack.append(tok)
+                continue
+
+            if tok == ')':
+                while stack and stack[-1] != '(':
+                    output.append(stack.pop())
+                stack.pop()
+                while stack and Op.is_prefix(stack[-1]):
+                    output.append(stack.pop())
+                continue
+
+            inc = Op.get(tok)
+            if not inc:
+                raise ValueError(f"Неизвестный токен: {tok!r}")
+
+            while stack and stack[-1] != '(' and not Op.is_prefix(stack[-1]):
+                top = Op.get(stack[-1])
+                if top and (top.prec > inc.prec or (top.prec == inc.prec and (inc.ass or 'L') == 'L')):
+                    output.append(stack.pop())
+                else:
+                    break
+            stack.append(tok)
+
+        while stack:
+            if stack[-1] == '(':
+                raise ValueError("Несбалансированные скобки")
+            output.append(stack.pop())
+
+        depth = 0
+        for t in output:
+            if Op.is_operand(t):
+                depth += 1
+            elif t in POSTFIX_OPS or Op.is_prefix(t):
+                if depth < 1:
+                    raise ValueError(f"Не хватает операнда для «{t}»")
+            elif Op.is_binary(t):
+                if depth < 2:
+                    raise ValueError(f"Не хватает операндов для «{t}»")
+                depth -= 1
+        if depth != 1:
+            raise ValueError("Выражение не сводится к одному значению")
+
+        return ' '.join(output)
+
+def interactive():
+
+    print("\n=== Инфикс → RPN === Введите 'exit' для выхода ===\n")
     while True:
-        expr = input("\nВыражение (exit для выхода): ").strip()
-        if expr.lower() == "exit":
+        expr = input("> ").strip()
+        if expr.lower() == 'exit':
             break
         if not expr:
             continue
@@ -310,12 +238,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    from pathlib import Path
 
-    p = Path(__file__).resolve()
-    print(f"Запущен скрипт: {p}")
-    if " " in p.name and "(" in p.name:
-        print(
-            "(Удобнее скопировать в файл с простым именем, например infix_rpn.py, и запускать его.)"
-        )
-    main()
+    interactive()
