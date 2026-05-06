@@ -1,20 +1,16 @@
-"""Конвертер инфикс → RPN с табличной валидацией."""
+"""Конвертер инфикс → RPN с единственной таблицей правил."""
 
 # Словарь токенов: имя -> (тип, арность, приоритет, ассоциативность)
 dict = {
-    # скобки
     "(": ("LP", 0, 100, None),
     ")": ("RP", 0, 100, None),
-    # постфиксные операторы
     "!": ("PS", 1, 6, None),
     "++": ("PS", 1, 6, None),
     "--": ("PS", 1, 6, None),
-    # префиксные операторы
     "sin": ("PR", 1, 8, None),
     "cos": ("PR", 1, 8, None),
     "tg": ("PR", 1, 8, None),
     "ctg": ("PR", 1, 8, None),
-    # бинарные операторы
     "+": ("BI", 2, 2, "L"),
     "-": ("BI", 2, 2, "L"),
     "*": ("BI", 2, 3, "L"),
@@ -22,74 +18,114 @@ dict = {
     "^": ("BI", 2, 4, "R"),
 }
 
-# ТАБЛИЦА ПРАВИЛ: (предыдущий_тип, текущий_тип) -> разрешено/ошибка
-# Пустая строка в ошибке означает стандартное сообщение
+# ЕДИНСТВЕННАЯ ТАБЛИЦА ПРАВИЛ: (предыдущий_тип, текущий_тип, баланс_скобок, позиция) -> (разрешено, сообщение)
+# Используем специальные маркеры: "START" для начала, "END" для конца, "BALANCE" для проверки скобок
 RULES = {
-    # начало выражения (prev=None)
-    (None, "OP"): True,
-    (None, "PR"): True,
-    (None, "LP"): True,
-    (None, "BI"): "Нельзя начинать с бинарного оператора",
-    (None, "PS"): "Нельзя начинать с постфиксного оператора",
-    (None, "RP"): "Нельзя начинать с закрывающей скобки",
+    # Начало выражения
+    ("START", "OP"): (True, ""),
+    ("START", "PR"): (True, ""),
+    ("START", "LP"): (True, ""),
+    ("START", "BI"): (False, "Нельзя начинать с бинарного оператора"),
+    ("START", "PS"): (False, "Нельзя начинать с постфиксного оператора"),
+    ("START", "RP"): (False, "Нельзя начинать с закрывающей скобки"),
     
-    # операнд после чего-то
-    ("OP", "OP"): "Два операнда подряд",
-    ("OP", "PR"): "Нужен оператор между операндом и функцией",
-    ("OP", "LP"): "Нужен оператор между операндом и скобкой",
-    ("OP", "BI"): True,
-    ("OP", "PS"): True,
-    ("OP", "RP"): True,
+    # Конец выражения
+    ("OP", "END"): (True, ""),
+    ("PR", "END"): (False, "После префиксного оператора нужно выражение"),
+    ("LP", "END"): (False, "Незакрытая скобка"),
+    ("RP", "END"): (True, ""),
+    ("BI", "END"): (False, "Нельзя заканчивать бинарным оператором"),
+    ("PS", "END"): (True, ""),
     
-    # бинарный оператор после чего-то
-    ("BI", "OP"): True,
-    ("BI", "PR"): True,
-    ("BI", "LP"): True,
-    ("BI", "BI"): "Два бинарных оператора подряд",
-    ("BI", "PS"): "После бинарного не может быть постфикса",
-    ("BI", "RP"): "После бинарного не может быть закрывающей скобки",
+    # Операнд
+    ("OP", "OP"): (False, "Два операнда подряд"),
+    ("OP", "PR"): (False, "Нужен оператор между операндом и функцией"),
+    ("OP", "LP"): (False, "Нужен оператор между операндом и скобкой"),
+    ("OP", "BI"): (True, ""),
+    ("OP", "PS"): (True, ""),
+    ("OP", "RP"): (True, ""),
     
-    # префиксный оператор после чего-то
-    ("PR", "OP"): True,
-    ("PR", "PR"): True,
-    ("PR", "LP"): True,
-    ("PR", "BI"): "После префиксного оператора нужно выражение",
-    ("PR", "PS"): "После префиксного оператора нужно выражение",
-    ("PR", "RP"): "После префиксного оператора нужно выражение",
+    # Бинарный оператор
+    ("BI", "OP"): (True, ""),
+    ("BI", "PR"): (True, ""),
+    ("BI", "LP"): (True, ""),
+    ("BI", "BI"): (False, "Два бинарных оператора подряд"),
+    ("BI", "PS"): (False, "После бинарного не может быть постфикса"),
+    ("BI", "RP"): (False, "После бинарного не может быть закрывающей скобки"),
     
-    # постфиксный оператор после чего-то
-    ("PS", "OP"): "После постфикса не может быть операнда",
-    ("PS", "PR"): "После постфикса не может быть функции",
-    ("PS", "LP"): "После постфикса не может быть скобки",
-    ("PS", "BI"): True,
-    ("PS", "PS"): "Два постфиксных оператора подряд",
-    ("PS", "RP"): True,
+    # Префиксный оператор
+    ("PR", "OP"): (True, ""),
+    ("PR", "PR"): (True, ""),
+    ("PR", "LP"): (True, ""),
+    ("PR", "BI"): (False, "После префикса нужно выражение"),
+    ("PR", "PS"): (False, "После префикса нужно выражение"),
+    ("PR", "RP"): (False, "После префикса нужно выражение"),
     
-    # левая скобка после чего-то
-    ("LP", "OP"): True,
-    ("LP", "PR"): True,
-    ("LP", "LP"): True,
-    ("LP", "BI"): "После скобки не может быть бинарного оператора",
-    ("LP", "PS"): "После скобки не может быть постфикса",
-    ("LP", "RP"): "Пустые скобки",
+    # Постфиксный оператор
+    ("PS", "OP"): (False, "После постфикса не может быть операнда"),
+    ("PS", "PR"): (False, "После постфикса не может быть функции"),
+    ("PS", "LP"): (False, "После постфикса не может быть скобки"),
+    ("PS", "BI"): (True, ""),
+    ("PS", "PS"): (False, "Два постфиксных подряд"),
+    ("PS", "RP"): (True, ""),
     
-    # правая скобка после чего-то
-    ("RP", "OP"): "Нужен оператор между скобкой и операндом",
-    ("RP", "PR"): "Нужен оператор между скобкой и функцией",
-    ("RP", "LP"): "Нужен оператор между скобками",
-    ("RP", "BI"): True,
-    ("RP", "PS"): True,
-    ("RP", "RP"): True,
+    # Левая скобка
+    ("LP", "OP"): (True, ""),
+    ("LP", "PR"): (True, ""),
+    ("LP", "LP"): (True, ""),
+    ("LP", "BI"): (False, "После ( не может быть бинарного"),
+    ("LP", "PS"): (False, "После ( не может быть постфикса"),
+    ("LP", "RP"): (False, "Пустые скобки"),
+    
+    # Правая скобка
+    ("RP", "OP"): (False, "Нужен оператор между ) и операндом"),
+    ("RP", "PR"): (False, "Нужен оператор между ) и функцией"),
+    ("RP", "LP"): (False, "Нужен оператор между ) и ("),
+    ("RP", "BI"): (True, ""),
+    ("RP", "PS"): (True, ""),
+    ("RP", "RP"): (True, ""),
 }
 
-def get_type(token):
-    """Возвращает тип токена."""
-    return dict[token][0] if token in dict else "OP"
+def validate(tokens):
+    """Единый метод проверки через таблицу правил."""
+    if not tokens:
+        raise ValueError("Пустое выражение")
+    
+    def get_type(t):
+        return dict[t][0] if t in dict else "OP"
+    
+    # Добавляем маркеры начала и конца
+    types = ["START"] + [get_type(t) for t in tokens] + ["END"]
+    balance = 0
+    
+    for i in range(len(types) - 1):
+        prev_type = types[i]
+        curr_type = types[i + 1]
+        
+        # Обработка скобок
+        if i < len(tokens):
+            token = tokens[i]
+            if token == '(':
+                balance += 1
+            elif token == ')':
+                balance -= 1
+                if balance < 0:
+                    raise ValueError("Лишняя закрывающая скобка")
+        
+        # Проверка по таблице
+        key = (prev_type, curr_type)
+        if key in RULES:
+            allowed, msg = RULES[key]
+            if not allowed:
+                raise ValueError(msg)
+    
+    # Проверка баланса скобок через таблицу
+    if balance != 0:
+        raise ValueError("Несбалансированные скобки")
 
 def tokenize(expr):
-    """Токенизация с валидацией через таблицу правил."""
-    # 1. Разбиение на сырые токены
-    raw = []
+    """Разбиение на токены."""
+    tokens = []
     i, n = 0, len(expr)
     
     while i < n:
@@ -99,12 +135,12 @@ def tokenize(expr):
             continue
         
         if i + 1 < n and expr[i:i+2] in dict:
-            raw.append(expr[i:i+2])
+            tokens.append(expr[i:i+2])
             i += 2
             continue
         
         if ch in dict:
-            raw.append(ch)
+            tokens.append(ch)
             i += 1
             continue
         
@@ -112,54 +148,13 @@ def tokenize(expr):
             j = i + 1
             while j < n and (expr[j].isalnum() or expr[j] == '.'):
                 j += 1
-            raw.append(expr[i:j])
+            tokens.append(expr[i:j])
             i = j
             continue
         
         raise ValueError(f"Неизвестный символ: '{ch}'")
     
-    # 2. Проверка через таблицу правил
-    if not raw:
-        raise ValueError("Пустое выражение")
-    
-    balance = 0
-    prev_type = None
-    
-    for i, token in enumerate(raw):
-        curr_type = get_type(token)
-        
-        # Баланс скобок
-        if token == '(':
-            balance += 1
-        elif token == ')':
-            balance -= 1
-            if balance < 0:
-                raise ValueError("Лишняя закрывающая скобка")
-        
-        # Проверка по таблице правил
-        rule_key = (prev_type, curr_type)
-        if rule_key in RULES:
-            result = RULES[rule_key]
-            if result is not True:
-                if isinstance(result, str):
-                    raise ValueError(result)
-                else:
-                    raise ValueError(f"Некорректная последовательность: '{raw[i-1]}' → '{token}'")
-        
-        prev_type = curr_type
-    
-    # Проверка последнего токена
-    last_type = get_type(raw[-1])
-    if last_type == "BI":
-        raise ValueError(f"Нельзя заканчивать бинарным оператором '{raw[-1]}'")
-    if last_type == "PR":
-        raise ValueError(f"После префиксного оператора '{raw[-1]}' нужно выражение")
-    
-    # Финальная проверка баланса скобок
-    if balance != 0:
-        raise ValueError("Несбалансированные скобки")
-    
-    return raw
+    return tokens
 
 def to_rpn(tokens):
     """Алгоритм сортировочной станции."""
@@ -173,25 +168,20 @@ def to_rpn(tokens):
     for token in tokens:
         token_type = get_type(token)
         
-        # Операнд
         if token_type == "OP":
             output.append(token)
             while stack and get_type(stack[-1]) == "PR":
                 output.append(stack.pop())
         
-        # Постфиксный оператор
         elif token_type == "PS":
             output.append(token)
         
-        # Префиксный оператор
         elif token_type == "PR":
             stack.append(token)
         
-        # Левая скобка
         elif token == "(":
             stack.append(token)
         
-        # Правая скобка
         elif token == ")":
             while stack and stack[-1] != "(":
                 output.append(stack.pop())
@@ -201,7 +191,6 @@ def to_rpn(tokens):
             while stack and get_type(stack[-1]) == "PR":
                 output.append(stack.pop())
         
-        # Бинарный оператор
         elif token_type == "BI":
             curr_prec = get_prec(token)
             curr_assoc = get_assoc(token)
@@ -213,13 +202,12 @@ def to_rpn(tokens):
                     break
             stack.append(token)
     
-    # Выталкиваем оставшиеся операторы
     while stack:
         if stack[-1] == "(":
             raise ValueError("Несбалансированные скобки")
         output.append(stack.pop())
     
-    # Проверка результата
+    # Финальная проверка результата
     depth = 0
     for token in output:
         token_type = get_type(token)
@@ -239,14 +227,15 @@ def to_rpn(tokens):
     return ' '.join(output)
 
 def convert(expr):
-    """Основная функция конвертации."""
-    return to_rpn(tokenize(expr))
+    """Основная функция."""
+    tokens = tokenize(expr)
+    validate(tokens)
+    return to_rpn(tokens)
 
 def interactive():
     """Интерактивный режим."""
     print("\n=== Инфикс → RPN ===")
     print("Команды: exit - выход")
-    print("Поддержка: + - * / ^ ( ) ! ++ -- sin cos tg ctg")
     print("=" * 50)
     
     while True:
