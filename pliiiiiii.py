@@ -65,10 +65,13 @@ def tokenize(expr):
             i += 1
             continue
         
-        if i + 1 < n and Op.is_postfix(expr[i:i+2]):
-            tokens.append(expr[i:i+2])
-            i += 2
-            continue
+        # Проверяем двухсимвольные операторы
+        if i + 1 < n:
+            two_chars = expr[i:i+2]
+            if Op.is_postfix(two_chars):
+                tokens.append(two_chars)
+                i += 2
+                continue
         
         if c.isalnum():
             j = i + 1
@@ -91,9 +94,73 @@ class InfixToRpn:
         Op.reg_all()
         self.source = expr
         raw = tokenize(expr)
-        self.tokens = self._fold_unary(raw)
+        self.tokens = self._process_operators(raw)
+
+    def _process_operators(self, tokens):
+        """Обрабатывает последовательности операторов"""
+        result = []
+        i = 0
+        n = len(tokens)
+        
+        while i < n:
+            tok = tokens[i]
+            
+            # Если это не оператор или не последовательность плюсов
+            if tok != '+':
+                result.append(tok)
+                i += 1
+                continue
+            
+            # Собираем последовательность плюсов
+            plus_count = 1
+            j = i + 1
+            while j < n and tokens[j] == '+':
+                plus_count += 1
+                j += 1
+            
+            # Проверяем, что после плюсов нет постфиксных операторов вплотную
+            if j < n and (Op.is_postfix(tokens[j])):
+                # Проверяем, что перед последовательностью плюсов есть операнд
+                if i > 0 and (Op.is_operand(result[-1]) or result[-1] == ')'):
+                    # Это бинарный оператор + и постфиксные операторы относятся к операнду слева
+                    # Добавляем один бинарный плюс
+                    result.append('+')
+                    i = j  # Пропускаем все плюсы
+                    continue
+                else:
+                    raise ValueError(f"Некорректная последовательность операторов: {'+' * plus_count}")
+            
+            # Анализируем последовательность плюсов
+            # Определяем контекст
+            prev = result[-1] if result else None
+            
+            if prev is None or prev == '(' or Op.is_binary(prev) or Op.is_prefix(prev):
+                # Начало выражения или после оператора - это могут быть унарные плюсы
+                # Унарные плюсы игнорируем (просто пропускаем)
+                if plus_count == 1:
+                    # Одиночный унарный плюс - просто игнорируем
+                    pass
+                elif plus_count == 2:
+                    # Два унарных плюса - тоже игнорируем
+                    pass
+                else:
+                    raise ValueError(f"Некорректная последовательность унарных плюсов: {'+' * plus_count}")
+            else:
+                # После операнда или скобки - это бинарный оператор
+                if plus_count == 1:
+                    result.append('+')
+                elif plus_count == 2:
+                    # Два плюса: первый бинарный, второй унарный? Некорректно
+                    raise ValueError(f"Некорректная последовательность: {'+' * plus_count}")
+                else:
+                    raise ValueError(f"Некорректная последовательность: {'+' * plus_count}")
+            
+            i = j
+        
+        return result
 
     def _fold_unary(self, tokens):
+        """Заменяет унарный минус на '~'"""
         res = []
         for i, t in enumerate(tokens):
             if t != '-':
@@ -118,8 +185,6 @@ class InfixToRpn:
         
         if Op.is_binary(ts[-1]):
             raise ValueError(f"Нельзя заканчивать бинарным оператором «{ts[-1]}»")
-        if Op.is_prefix(ts[-1]):
-            raise ValueError(f"После префиксного оператора «{ts[-1]}» должно быть выражение")
         
         balance = 0
         for i, curr in enumerate(ts):
@@ -140,12 +205,6 @@ class InfixToRpn:
             
             if prev == ')' and (curr == '(' or Op.is_operand(curr)):
                 raise ValueError(f"Нужен оператор между «{prev}» и «{curr}»")
-            
-            if Op.is_postfix(prev) and curr == '(':
-                raise ValueError(f"После постфиксного оператора «{prev}» ожидался оператор, а не '('")
-            
-            if Op.is_prefix(prev) and (Op.is_binary(curr) or curr == ')' or Op.is_postfix(curr)):
-                raise ValueError(f"После префиксного оператора «{prev}» нужно выражение, а не «{curr}»")
             
             if Op.is_postfix(prev) and Op.is_binary(curr):
                 raise ValueError(f"Некорректная запись: постфиксный оператор «{prev}» перед бинарным «{curr}»")
@@ -229,6 +288,14 @@ class InfixToRpn:
 
 def interactive():
     print("\n=== Инфикс → RPN === Введите 'exit' для выхода ===\n")
+    print("Примеры правильных выражений:")
+    print("  11 ++ ++ + 1  -> 11 ++ ++ 1 +")
+    print("  11 ++ + 1     -> 11 ++ 1 +")
+    print("\nПримеры неправильных:")
+    print("  11 +++ 1      -> Ошибка")
+    print("  11 ++ + ++ 1  -> Ошибка")
+    print()
+    
     while True:
         expr = input("> ").strip()
         if expr.lower() == 'exit':
@@ -236,7 +303,8 @@ def interactive():
         if not expr:
             continue
         try:
-            print(f"RPN: {InfixToRpn(expr).to_rpn()}")
+            rpn = InfixToRpn(expr).to_rpn()
+            print(f"RPN: {rpn}")
         except Exception as e:
             print(f"Ошибка: {e}")
 
