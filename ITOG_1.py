@@ -1,401 +1,264 @@
-"""Конвертер инфикс → RPN. Упрощенная версия с единым реестром операторов."""
+"""Конвертер инфикс → RPN с табличной валидацией."""
 
-# Единый реестр операторов: имя, арность, приоритет, ассоциативность
-OPERATORS = [
-    # Скобки (максимальный приоритет 100)
-    ("(", 0, 100, None),   # арность 0 означает скобку
-    (")", 0, 100, None),
-    # Постфиксные операторы (арность 1, идут после операнда)
-    ("!", 1, 6, "POST"),   # POST - специальный тип для постфиксных
-    ("++", 1, 6, "POST"),
-    ("--", 1, 6, "POST"),
-    # Префиксные операторы (арность 1, идут перед операндом)
-    ("~", 1, 5, "R"),      # унарный минус
-    ("sin", 1, 8, "R"),
-    ("cos", 1, 8, "R"),
-    ("tg", 1, 8, "R"),
-    ("ctg", 1, 8, "R"),
-    # Бинарные операторы (арность 2)
-    ("+", 2, 2, "L"),
-    ("-", 2, 2, "L"),
-    ("*", 2, 3, "L"),
-    ("/", 2, 3, "L"),
-    ("^", 2, 4, "R"),
-]
+# Словарь токенов: имя -> (тип, арность, приоритет, ассоциативность)
+dict = {
+    # скобки
+    "(": ("LP", 0, 100, None),
+    ")": ("RP", 0, 100, None),
+    # постфиксные операторы
+    "!": ("PS", 1, 6, None),
+    "++": ("PS", 1, 6, None),
+    "--": ("PS", 1, 6, None),
+    # префиксные операторы
+    "sin": ("PR", 1, 8, None),
+    "cos": ("PR", 1, 8, None),
+    "tg": ("PR", 1, 8, None),
+    "ctg": ("PR", 1, 8, None),
+    # бинарные операторы
+    "+": ("BI", 2, 2, "L"),
+    "-": ("BI", 2, 2, "L"),
+    "*": ("BI", 2, 3, "L"),
+    "/": ("BI", 2, 3, "L"),
+    "^": ("BI", 2, 4, "R"),
+}
 
-class Op:
-    """Реестр операторов"""
-    reg = {}  # Переименовано с _reg на reg
+# ТАБЛИЦА ПРАВИЛ: (предыдущий_тип, текущий_тип) -> разрешено/ошибка
+# Пустая строка в ошибке означает стандартное сообщение
+RULES = {
+    # начало выражения (prev=None)
+    (None, "OP"): True,
+    (None, "PR"): True,
+    (None, "LP"): True,
+    (None, "BI"): "Нельзя начинать с бинарного оператора",
+    (None, "PS"): "Нельзя начинать с постфиксного оператора",
+    (None, "RP"): "Нельзя начинать с закрывающей скобки",
     
-    def __init__(self, name, arity, prec, assoc):
-        self.name = name
-        self.arity = arity      # 0=скобка, 1=унарный, 2=бинарный
-        self.prec = prec        # приоритет (чем выше, тем раньше)
-        self.assoc = assoc      # "L"=левая, "R"=правая, "POST"=постфиксный, None=не важно
-        Op.reg[name] = self
+    # операнд после чего-то
+    ("OP", "OP"): "Два операнда подряд",
+    ("OP", "PR"): "Нужен оператор между операндом и функцией",
+    ("OP", "LP"): "Нужен оператор между операндом и скобкой",
+    ("OP", "BI"): True,
+    ("OP", "PS"): True,
+    ("OP", "RP"): True,
     
-    @classmethod
-    def register_all(cls):
-        """Регистрация всех операторов из списка OPERATORS"""
-        cls.reg.clear()
-        for name, arity, prec, assoc in OPERATORS:
-            cls(name, arity, prec, assoc)
+    # бинарный оператор после чего-то
+    ("BI", "OP"): True,
+    ("BI", "PR"): True,
+    ("BI", "LP"): True,
+    ("BI", "BI"): "Два бинарных оператора подряд",
+    ("BI", "PS"): "После бинарного не может быть постфикса",
+    ("BI", "RP"): "После бинарного не может быть закрывающей скобки",
     
-    @classmethod
-    def get(cls, name):
-        """Получить оператор по имени"""
-        return cls.reg.get(name)
+    # префиксный оператор после чего-то
+    ("PR", "OP"): True,
+    ("PR", "PR"): True,
+    ("PR", "LP"): True,
+    ("PR", "BI"): "После префиксного оператора нужно выражение",
+    ("PR", "PS"): "После префиксного оператора нужно выражение",
+    ("PR", "RP"): "После префиксного оператора нужно выражение",
     
-    @classmethod
-    def exists(cls, name):
-        """Проверить существование оператора"""
-        return name in cls.reg
+    # постфиксный оператор после чего-то
+    ("PS", "OP"): "После постфикса не может быть операнда",
+    ("PS", "PR"): "После постфикса не может быть функции",
+    ("PS", "LP"): "После постфикса не может быть скобки",
+    ("PS", "BI"): True,
+    ("PS", "PS"): "Два постфиксных оператора подряд",
+    ("PS", "RP"): True,
     
-    @classmethod
-    def is_unary(cls, name):
-        """Проверка на унарный оператор (префиксный или постфиксный)"""
-        op = cls.get(name)
-        return op is not None and op.arity == 1
+    # левая скобка после чего-то
+    ("LP", "OP"): True,
+    ("LP", "PR"): True,
+    ("LP", "LP"): True,
+    ("LP", "BI"): "После скобки не может быть бинарного оператора",
+    ("LP", "PS"): "После скобки не может быть постфикса",
+    ("LP", "RP"): "Пустые скобки",
     
-    @classmethod
-    def is_binary(cls, name):
-        """Проверка на бинарный оператор"""
-        op = cls.get(name)
-        return op is not None and op.arity == 2
-    
-    @classmethod
-    def is_prefix(cls, name):
-        """Проверка на префиксный унарный оператор (не постфиксный)"""
-        op = cls.get(name)
-        return op is not None and op.arity == 1 and op.assoc != "POST"
-    
-    @classmethod
-    def is_postfix(cls, name):
-        """Проверка на постфиксный оператор"""
-        op = cls.get(name)
-        return op is not None and op.arity == 1 and op.assoc == "POST"
-    
-    @classmethod
-    def is_left_paren(cls, name):
-        """Проверка на открывающую скобку"""
-        return name == "("
-    
-    @classmethod
-    def is_right_paren(cls, name):
-        """Проверка на закрывающую скобку"""
-        return name == ")"
-    
-    @classmethod
-    def is_paren(cls, name):
-        """Проверка на любую скобку"""
-        return name in "()"
-    
-    @classmethod
-    def is_operand(cls, name):
-        """Проверка на операнд (число или переменная)"""
-        return not cls.is_paren(name) and not cls.exists(name)
+    # правая скобка после чего-то
+    ("RP", "OP"): "Нужен оператор между скобкой и операндом",
+    ("RP", "PR"): "Нужен оператор между скобкой и функцией",
+    ("RP", "LP"): "Нужен оператор между скобками",
+    ("RP", "BI"): True,
+    ("RP", "PS"): True,
+    ("RP", "RP"): True,
+}
 
+def get_type(token):
+    """Возвращает тип токена."""
+    return dict[token][0] if token in dict else "OP"
 
 def tokenize(expr):
-    """
-    Разбивает выражение на токены с учетом всех операторов из реестра.
-    
-    Пример: "2+3*sin(x)" -> ['2', '+', '3', '*', 'sin', '(', 'x', ')']
-    """
-    tokens = []
-    i = 0
-    n = len(expr)
+    """Токенизация с валидацией через таблицу правил."""
+    # 1. Разбиение на сырые токены
+    raw = []
+    i, n = 0, len(expr)
     
     while i < n:
         ch = expr[i]
-        
-        # Пропуск пробелов
         if ch.isspace():
             i += 1
             continue
         
-        # Проверка на двухсимвольные операторы (из реестра)
-        if i + 1 < n:
-            two_chars = expr[i:i+2]
-            if Op.exists(two_chars):
-                tokens.append(two_chars)
-                i += 2
-                continue
+        if i + 1 < n and expr[i:i+2] in dict:
+            raw.append(expr[i:i+2])
+            i += 2
+            continue
         
-        # Проверка на односимвольные операторы и скобки (из реестра)
-        if Op.exists(ch):
-            tokens.append(ch)
+        if ch in dict:
+            raw.append(ch)
             i += 1
             continue
         
-        # Числа и идентификаторы (переменные, функции)
         if ch.isalnum() or ch == '.':
             j = i + 1
             while j < n and (expr[j].isalnum() or expr[j] == '.'):
                 j += 1
-            token = expr[i:j]
-            tokens.append(token)
+            raw.append(expr[i:j])
             i = j
             continue
         
-        # Если ничего не подошло - ошибка
         raise ValueError(f"Неизвестный символ: '{ch}'")
     
-    return tokens
-
-
-class InfixToRpn:
-    def __init__(self, expr):
-        """Инициализация конвертера"""
-        Op.register_all()
-        self.source = expr
-        raw_tokens = tokenize(expr)
-        self.tokens = self._fold_unary(raw_tokens)
+    # 2. Проверка через таблицу правил
+    if not raw:
+        raise ValueError("Пустое выражение")
     
-    def _fold_unary(self, tokens):
-        """
-        Заменяет унарный минус '-' на специальный оператор '~'.
-        Унарным минус считается в следующих случаях:
-        - первый токен
-        - после открывающей скобки
-        - после бинарного оператора
-        - после префиксного оператора
-        """
-        result = []
-        for i, token in enumerate(tokens):
-            if token != '-':
-                result.append(token)
-                continue
-            
-            # Определяем предыдущий токен (если есть)
-            prev = result[-1] if result else None
-            
-            # Проверяем, является ли минус унарным
-            is_unary = (prev is None or 
-                       Op.is_left_paren(prev) or 
-                       Op.is_binary(prev) or 
-                       Op.is_prefix(prev))
-            
-            if is_unary:
-                result.append('~')  # Заменяем на специальный унарный минус
-            else:
-                result.append('-')  # Оставляем как бинарный
-        return result
+    balance = 0
+    prev_type = None
     
-    def _validate(self):
-        """
-        Проверяет корректность выражения используя информацию из реестра.
-        """
-        ts = self.tokens
+    for i, token in enumerate(raw):
+        curr_type = get_type(token)
         
-        if not ts:
-            raise ValueError("Пустое выражение")
+        # Баланс скобок
+        if token == '(':
+            balance += 1
+        elif token == ')':
+            balance -= 1
+            if balance < 0:
+                raise ValueError("Лишняя закрывающая скобка")
         
-        # Проверка начала выражения
-        first = ts[0]
-        if Op.is_binary(first):
-            raise ValueError(f"Нельзя начинать с бинарного оператора '{first}'")
-        if Op.is_postfix(first):
-            raise ValueError(f"Нельзя начинать с постфиксного оператора '{first}'")
+        # Проверка по таблице правил
+        rule_key = (prev_type, curr_type)
+        if rule_key in RULES:
+            result = RULES[rule_key]
+            if result is not True:
+                if isinstance(result, str):
+                    raise ValueError(result)
+                else:
+                    raise ValueError(f"Некорректная последовательность: '{raw[i-1]}' → '{token}'")
         
-        # Проверка конца выражения
-        last = ts[-1]
-        if Op.is_binary(last):
-            raise ValueError(f"Нельзя заканчивать бинарным оператором '{last}'")
-        if Op.is_prefix(last):
-            raise ValueError(f"Нельзя заканчивать префиксным оператором '{last}'")
-        if Op.is_right_paren(last):
-            # Скобка в конце допустима, но проверим баланс позже
-            pass
+        prev_type = curr_type
+    
+    # Проверка последнего токена
+    last_type = get_type(raw[-1])
+    if last_type == "BI":
+        raise ValueError(f"Нельзя заканчивать бинарным оператором '{raw[-1]}'")
+    if last_type == "PR":
+        raise ValueError(f"После префиксного оператора '{raw[-1]}' нужно выражение")
+    
+    # Финальная проверка баланса скобок
+    if balance != 0:
+        raise ValueError("Несбалансированные скобки")
+    
+    return raw
+
+def to_rpn(tokens):
+    """Алгоритм сортировочной станции."""
+    output = []
+    stack = []
+    
+    def get_type(t): return dict[t][0] if t in dict else "OP"
+    def get_prec(t): return dict[t][2] if t in dict else 0
+    def get_assoc(t): return dict[t][3] if t in dict and len(dict[t]) > 3 else None
+    
+    for token in tokens:
+        token_type = get_type(token)
         
-        # Баланс скобок и проверки соседних токенов
-        balance = 0
-        for i, curr in enumerate(ts):
-            # Баланс скобок
-            if Op.is_left_paren(curr):
-                balance += 1
-            elif Op.is_right_paren(curr):
-                balance -= 1
-                if balance < 0:
-                    raise ValueError("Лишняя закрывающая скобка ')'")
-            
-            if i == 0:
-                continue
-            
-            prev = ts[i-1]
-            
-            # Проверка: два операнда подряд
-            if Op.is_operand(prev) and Op.is_operand(curr):
-                raise ValueError(f"Нужен оператор между '{prev}' и '{curr}'")
-            
-            # Проверка: операнд и открывающая скобка
-            if Op.is_operand(prev) and Op.is_left_paren(curr):
-                raise ValueError(f"Нужен оператор между '{prev}' и '{curr}'")
-            
-            # Проверка: закрывающая скобка и открывающая скобка
-            if Op.is_right_paren(prev) and Op.is_left_paren(curr):
-                raise ValueError(f"Нужен оператор между '{prev}' и '{curr}'")
-            
-            # Проверка: закрывающая скобка и операнд
-            if Op.is_right_paren(prev) and Op.is_operand(curr):
-                raise ValueError(f"Нужен оператор между '{prev}' и '{curr}'")
-            
-            # Проверка: закрывающая скобка и префиксный оператор
-            if Op.is_right_paren(prev) and Op.is_prefix(curr):
-                raise ValueError(f"Нужен оператор между '{prev}' и '{curr}'")
-            
-            # Проверка: после постфиксного оператора не может быть открывающей скобки
-            if Op.is_postfix(prev) and Op.is_left_paren(curr):
-                raise ValueError(f"После постфиксного оператора '{prev}' нужен оператор, а не '('")
-            
-            # Проверка: после префиксного оператора должно быть выражение
-            if Op.is_prefix(prev) and (Op.is_binary(curr) or Op.is_right_paren(curr) or Op.is_postfix(curr)):
-                raise ValueError(f"После префиксного оператора '{prev}' нужно выражение, а не '{curr}'")
-            
-            # Проверка: два бинарных оператора подряд
-            if Op.is_binary(prev) and Op.is_binary(curr):
-                raise ValueError(f"Два бинарных оператора подряд: '{prev}' и '{curr}'")
-            
-            # Проверка: постфиксный оператор должен идти после операнда или скобки
-            if Op.is_postfix(curr) and not (Op.is_operand(prev) or Op.is_right_paren(prev)):
-                raise ValueError(f"Постфиксный оператор '{curr}' должен идти после операнда или ')'")
-            
-            # Проверка: префиксный оператор не может идти после операнда (нужен бинарный)
-            if Op.is_prefix(curr) and Op.is_operand(prev):
-                raise ValueError(f"Нужен оператор между '{prev}' и '{curr}'")
-            
-            # Проверка: после числа не может идти число (уже проверили), 
-            # но функция должна иметь оператор перед собой
-            if Op.exists(curr) and Op.is_operand(prev) and not Op.is_binary(curr):
-                if not (Op.is_prefix(curr) or Op.is_postfix(curr)):
-                    raise ValueError(f"Нужен оператор между '{prev}' и '{curr}'")
+        # Операнд
+        if token_type == "OP":
+            output.append(token)
+            while stack and get_type(stack[-1]) == "PR":
+                output.append(stack.pop())
         
-        # Финальная проверка баланса скобок
-        if balance != 0:
+        # Постфиксный оператор
+        elif token_type == "PS":
+            output.append(token)
+        
+        # Префиксный оператор
+        elif token_type == "PR":
+            stack.append(token)
+        
+        # Левая скобка
+        elif token == "(":
+            stack.append(token)
+        
+        # Правая скобка
+        elif token == ")":
+            while stack and stack[-1] != "(":
+                output.append(stack.pop())
+            if not stack:
+                raise ValueError("Непарная скобка")
+            stack.pop()
+            while stack and get_type(stack[-1]) == "PR":
+                output.append(stack.pop())
+        
+        # Бинарный оператор
+        elif token_type == "BI":
+            curr_prec = get_prec(token)
+            curr_assoc = get_assoc(token)
+            while (stack and stack[-1] != "(" and get_type(stack[-1]) != "PR"):
+                top_prec = get_prec(stack[-1])
+                if top_prec > curr_prec or (top_prec == curr_prec and curr_assoc == "L"):
+                    output.append(stack.pop())
+                else:
+                    break
+            stack.append(token)
+    
+    # Выталкиваем оставшиеся операторы
+    while stack:
+        if stack[-1] == "(":
             raise ValueError("Несбалансированные скобки")
+        output.append(stack.pop())
     
-    def to_rpn(self):
-        """
-        Преобразует инфиксное выражение в обратную польскую нотацию (RPN).
-        Использует алгоритм сортировочной станции Дейкстры.
-        """
-        self._validate()
-        output = []  # Выходная очередь
-        stack = []   # Стек операторов
-        
-        for token in self.tokens:
-            # 1. Операнд - сразу в выход
-            if Op.is_operand(token):
-                output.append(token)
-                # Выталкиваем все префиксные операторы из стека
-                while stack and Op.is_prefix(stack[-1]):
-                    output.append(stack.pop())
-                continue
-            
-            # 2. Постфиксный оператор - сразу в выход
-            if Op.is_postfix(token):
-                output.append(token)
-                continue
-            
-            # 3. Префиксный оператор - в стек
-            if Op.is_prefix(token):
-                stack.append(token)
-                continue
-            
-            # 4. Открывающая скобка - в стек
-            if Op.is_left_paren(token):
-                stack.append(token)
-                continue
-            
-            # 5. Закрывающая скобка - выталкиваем до открывающей
-            if Op.is_right_paren(token):
-                while stack and not Op.is_left_paren(stack[-1]):
-                    output.append(stack.pop())
-                if not stack:
-                    raise ValueError("Непарная скобка")
-                stack.pop()  # Удаляем '('
-                # Выталкиваем префиксные операторы
-                while stack and Op.is_prefix(stack[-1]):
-                    output.append(stack.pop())
-                continue
-            
-            # 6. Бинарный оператор
-            if Op.is_binary(token):
-                current_op = Op.get(token)
-                
-                # Выталкиваем операторы с бОльшим или равным приоритетом
-                while (stack and 
-                       not Op.is_left_paren(stack[-1]) and 
-                       not Op.is_prefix(stack[-1])):
-                    top_op = Op.get(stack[-1])
-                    if top_op:
-                        # Условие выталкивания:
-                        # - приоритет верхнего больше
-                        # - или приоритет равен и текущий левоассоциативный
-                        if (top_op.prec > current_op.prec or
-                            (top_op.prec == current_op.prec and current_op.assoc == "L")):
-                            output.append(stack.pop())
-                        else:
-                            break
-                    else:
-                        break
-                stack.append(token)
-                continue
-            
-            # Если дошли сюда - неизвестный токен
-            raise ValueError(f"Неизвестный токен: '{token}'")
-        
-        # Выталкиваем все оставшиеся операторы
-        while stack:
-            if Op.is_left_paren(stack[-1]):
-                raise ValueError("Несбалансированные скобки")
-            output.append(stack.pop())
-        
-        # Финальная проверка: должно получиться одно значение на стеке
-        depth = 0
-        for token in output:
-            if Op.is_operand(token):
-                depth += 1
-            elif Op.is_postfix(token) or Op.is_prefix(token):
-                if depth < 1:
-                    raise ValueError(f"Не хватает операнда для '{token}'")
-                # Унарные операторы не меняют глубину (1 -> 1)
-            elif Op.is_binary(token):
-                if depth < 2:
-                    raise ValueError(f"Не хватает операндов для '{token}'")
-                depth -= 1  # Бинарный: 2 операнда -> 1 результат
-            else:
-                raise ValueError(f"Некорректный токен в результате: '{token}'")
-        
-        if depth != 1:
-            raise ValueError("Выражение не сводится к одному значению")
-        
-        return ' '.join(output)
+    # Проверка результата
+    depth = 0
+    for token in output:
+        token_type = get_type(token)
+        if token_type == "OP":
+            depth += 1
+        elif token_type in ("PR", "PS"):
+            if depth < 1:
+                raise ValueError(f"Не хватает операнда для '{token}'")
+        elif token_type == "BI":
+            if depth < 2:
+                raise ValueError(f"Не хватает операндов для '{token}'")
+            depth -= 1
+    
+    if depth != 1:
+        raise ValueError("Выражение не сводится к одному значению")
+    
+    return ' '.join(output)
 
+def convert(expr):
+    """Основная функция конвертации."""
+    return to_rpn(tokenize(expr))
 
 def interactive():
-    """Интерактивный режим работы конвертера"""
+    """Интерактивный режим."""
     print("\n=== Инфикс → RPN ===")
-    print("Введите математическое выражение или 'exit' для выхода")
-    print("Поддерживаются: + - * / ^ ( ) ! ++ -- sin cos tg ctg")
-    print("Унарный минус пишите как обычно: -3 или 5*(-2)")
+    print("Команды: exit - выход")
+    print("Поддержка: + - * / ^ ( ) ! ++ -- sin cos tg ctg")
     print("=" * 50)
     
     while True:
+        expr = input("\n> ").strip()
+        if expr.lower() == 'exit':
+            break
+        if not expr:
+            continue
         try:
-            expr = input("\n> ").strip()
-            if expr.lower() == 'exit':
-                break
-            if not expr:
-                continue
-            
-            converter = InfixToRpn(expr)
-            rpn = converter.to_rpn()
-            print(f"RPN: {rpn}")
-            
+            print(f"RPN: {convert(expr)}")
         except Exception as e:
             print(f"Ошибка: {e}")
-
 
 if __name__ == "__main__":
     interactive()
