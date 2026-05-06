@@ -1,71 +1,75 @@
-from __future__ import annotations
-from typing import List, Optional
-
-OPERATORS = [
-    ("+", 2, 2, "L"),
-    ("-", 2, 2, "L"),
-    ("*", 2, 3, "L"),
-    ("/", 2, 3, "L"),
-    ("^", 2, 4, "R"),
-    ("~", 1, 5, "R"),
-    ("!", 1, 6, None),
-    ("++", 1, 6, None),
-    ("--", 1, 6, None),
-    ("sin", 1, 8, None),
-    ("cos", 1, 8, None),
-    ("tg", 1, 8, None),
-    ("ctg", 1, 8, None),
-    ("(", 0, 10, None),
-    (")", 0, 10, None),
-]
-
+# Словарь операторов с дополнительной информацией
+OPERATORS_DICT = {
+    "+": {"arity": 2, "prec": 2, "ass": "L", "type": "binary"},
+    "-": {"arity": 2, "prec": 2, "ass": "L", "type": "binary"},
+    "*": {"arity": 2, "prec": 3, "ass": "L", "type": "binary"},
+    "/": {"arity": 2, "prec": 3, "ass": "L", "type": "binary"},
+    "^": {"arity": 2, "prec": 4, "ass": "R", "type": "binary"},
+    "~": {"arity": 1, "prec": 5, "ass": "R", "type": "prefix"},
+    "!": {"arity": 1, "prec": 6, "ass": None, "type": "postfix"},
+    "++": {"arity": 1, "prec": 6, "ass": None, "type": "postfix"},
+    "--": {"arity": 1, "prec": 6, "ass": None, "type": "postfix"},
+    "sin": {"arity": 1, "prec": 8, "ass": None, "type": "prefix"},
+    "cos": {"arity": 1, "prec": 8, "ass": None, "type": "prefix"},
+    "tg": {"arity": 1, "prec": 8, "ass": None, "type": "prefix"},
+    "ctg": {"arity": 1, "prec": 8, "ass": None, "type": "prefix"},
+    "(": {"arity": 0, "prec": 10, "ass": None, "type": "paren_left"},
+    ")": {"arity": 0, "prec": 10, "ass": None, "type": "paren_right"},
+}
 
 class Op:
     reg = {}
 
-    def __init__(self, name: str, arity: int, prec: int, ass: Optional[str] = None):
+    def __init__(self, name, arity, prec, ass=None, op_type=None):
         self.name = name
         self.arity = arity
         self.prec = prec
         self.ass = ass
+        self.type = op_type
         Op.reg[name] = self
 
     @classmethod
     def reg_all(cls):
         cls.reg.clear()
-        for name, arity, prec, ass in OPERATORS:
-            cls(name, arity, prec, ass)
+        for name, info in OPERATORS_DICT.items():
+            cls(name, info["arity"], info["prec"], info.get("ass"), info["type"])
 
     @classmethod
-    def get(cls, name: str) -> Optional[Op]:
+    def get(cls, name):
         return cls.reg.get(name)
 
     @classmethod
-    def is_binary(cls, t: str) -> bool:
+    def is_binary(cls, t):
         op = cls.get(t)
-        return op is not None and op.arity == 2
+        return op is not None and op.type == "binary"
 
     @classmethod
-    def is_prefix(cls, t: str) -> bool:
+    def is_prefix(cls, t):
         op = cls.get(t)
-        return op is not None and op.arity == 1 and t not in POSTFIX_OPS
+        return op is not None and op.type == "prefix"
 
     @classmethod
-    def is_operand(cls, t: str) -> bool:
+    def is_postfix(cls, t):
+        op = cls.get(t)
+        return op is not None and op.type == "postfix"
+
+    @classmethod
+    def is_operand(cls, t):
         return t not in "()" and cls.get(t) is None
 
-
-def tokenize(expr: str) -> List[str]:
+def tokenize(expr):
     tokens, i, n = [], 0, len(expr)
     while i < n:
         c = expr[i]
         if c.isspace():
             i += 1
             continue
-        if i + 1 < n and expr[i:i+2] in POSTFIX_OPS:
+        
+        if i + 1 < n and Op.is_postfix(expr[i:i+2]):
             tokens.append(expr[i:i+2])
             i += 2
             continue
+        
         if c.isalnum():
             j = i + 1
             while j < n and (expr[j].isalnum()):
@@ -73,26 +77,24 @@ def tokenize(expr: str) -> List[str]:
             tokens.append(expr[i:j])
             i = j
             continue
-        if c in "+-*/^()!":
+        
+        if c in OPERATORS_DICT:
             tokens.append(c)
             i += 1
             continue
-        raise ValueError(f"Неизвестный символ")
+        
+        raise ValueError(f"Неизвестный символ: {c!r}")
     return tokens
 
-POSTFIX_OPS = {"++", "--", "!"}
-TRIG_NAMES = {"sin", "cos", "tg", "ctg"}
-
 class InfixToRpn:
-    def __init__(self, expr: str):
+    def __init__(self, expr):
         Op.reg_all()
         self.source = expr
         raw = tokenize(expr)
         self.tokens = self._fold_unary(raw)
 
-    def _fold_unary(self, tokens: List[str]) -> List[str]:
+    def _fold_unary(self, tokens):
         res = []
-
         for i, t in enumerate(tokens):
             if t != '-':
                 res.append(t)
@@ -104,21 +106,21 @@ class InfixToRpn:
                 res.append('-')
         return res
 
-    def _validate(self) -> None:
+    def _validate(self):
         ts = self.tokens
         if not ts:
             raise ValueError("Пустое выражение")
-
+        
         if Op.is_binary(ts[0]):
-            raise ValueError(f"Нельзя начинать с «{ts[0]}»")
-        if ts[0] in POSTFIX_OPS:
+            raise ValueError(f"Нельзя начинать с бинарного оператора «{ts[0]}»")
+        if Op.is_postfix(ts[0]):
             raise ValueError("Постфиксный оператор не может быть в начале")
-
+        
         if Op.is_binary(ts[-1]):
-            raise ValueError(f"Нельзя заканчивать оператором «{ts[-1]}»")
+            raise ValueError(f"Нельзя заканчивать бинарным оператором «{ts[-1]}»")
         if Op.is_prefix(ts[-1]):
-            raise ValueError(f"После «{ts[-1]}» должно быть выражение")
-
+            raise ValueError(f"После префиксного оператора «{ts[-1]}» должно быть выражение")
+        
         balance = 0
         for i, curr in enumerate(ts):
             if curr == '(':
@@ -126,61 +128,60 @@ class InfixToRpn:
             elif curr == ')':
                 balance -= 1
                 if balance < 0:
-                    raise ValueError("Лишняя ')'")
+                    raise ValueError("Лишняя закрывающая скобка ')'")
+            
             if i == 0:
                 continue
-
+            
             prev = ts[i-1]
-
-            if Op.is_operand(prev) and (Op.is_operand(curr) or curr == '(' or Op.is_prefix(curr)):
+            
+            if Op.is_operand(prev) and (Op.is_operand(curr) or curr == '('):
                 raise ValueError(f"Нужен оператор между «{prev}» и «{curr}»")
-            if prev == ')' and (curr == '(' or Op.is_operand(curr) or Op.is_prefix(curr)):
+            
+            if prev == ')' and (curr == '(' or Op.is_operand(curr)):
                 raise ValueError(f"Нужен оператор между «{prev}» и «{curr}»")
-
-            if prev in POSTFIX_OPS and curr == '(':
-                raise ValueError(f"После «{prev}» нужен оператор, а не «(»")
-
-            if curr in TRIG_NAMES and not (prev in '()' or Op.get(prev)):
-                raise ValueError(f"Нужен оператор между «{prev}» и «{curr}»")
-
-            if Op.is_prefix(prev) and (Op.is_binary(curr) or curr == ')' or curr in POSTFIX_OPS):
-                raise ValueError(f"После «{prev}» нужно выражение, а не «{curr}»")
-
-            if prev in POSTFIX_OPS and Op.is_binary(curr):
-                raise ValueError("некорректная запись")
-
+            
+            if Op.is_postfix(prev) and curr == '(':
+                raise ValueError(f"После постфиксного оператора «{prev}» ожидался оператор, а не '('")
+            
+            if Op.is_prefix(prev) and (Op.is_binary(curr) or curr == ')' or Op.is_postfix(curr)):
+                raise ValueError(f"После префиксного оператора «{prev}» нужно выражение, а не «{curr}»")
+            
+            if Op.is_postfix(prev) and Op.is_binary(curr):
+                raise ValueError(f"Некорректная запись: постфиксный оператор «{prev}» перед бинарным «{curr}»")
+            
             if Op.is_binary(prev) and Op.is_binary(curr):
-                raise ValueError(f"Два бинарных подряд: «{prev}» и «{curr}»")
-
-            if curr in POSTFIX_OPS and not (Op.is_operand(prev) or prev == ')'):
-                raise ValueError(f"некорректная запись")
-
+                raise ValueError(f"Два бинарных оператора подряд: «{prev}» и «{curr}»")
+            
+            if Op.is_postfix(curr) and not (Op.is_operand(prev) or prev == ')'):
+                raise ValueError(f"Некорректная запись: постфиксный оператор «{curr}» применён не к операнду")
+        
         if balance != 0:
             raise ValueError("Несбалансированные скобки")
 
-    def to_rpn(self) -> str:
+    def to_rpn(self):
         self._validate()
         output, stack = [], []
-
+        
         for tok in self.tokens:
             if Op.is_operand(tok):
                 output.append(tok)
                 while stack and Op.is_prefix(stack[-1]):
                     output.append(stack.pop())
                 continue
-
+            
             if Op.is_prefix(tok):
                 stack.append(tok)
                 continue
-
-            if tok in POSTFIX_OPS:
+            
+            if Op.is_postfix(tok):
                 output.append(tok)
                 continue
-
+            
             if tok == '(':
                 stack.append(tok)
                 continue
-
+            
             if tok == ')':
                 while stack and stack[-1] != '(':
                     output.append(stack.pop())
@@ -188,42 +189,45 @@ class InfixToRpn:
                 while stack and Op.is_prefix(stack[-1]):
                     output.append(stack.pop())
                 continue
-
+            
             inc = Op.get(tok)
             if not inc:
                 raise ValueError(f"Неизвестный токен: {tok!r}")
-
-            while stack and stack[-1] != '(' and not Op.is_prefix(stack[-1]):
+            
+            while (stack and stack[-1] != '(' and 
+                   not Op.is_prefix(stack[-1]) and 
+                   not Op.is_postfix(stack[-1])):
                 top = Op.get(stack[-1])
-                if top and (top.prec > inc.prec or (top.prec == inc.prec and (inc.ass or 'L') == 'L')):
+                if top and (top.prec > inc.prec or 
+                           (top.prec == inc.prec and (inc.ass or 'L') == 'L')):
                     output.append(stack.pop())
                 else:
                     break
             stack.append(tok)
-
+        
         while stack:
             if stack[-1] == '(':
                 raise ValueError("Несбалансированные скобки")
             output.append(stack.pop())
-
+        
         depth = 0
         for t in output:
             if Op.is_operand(t):
                 depth += 1
-            elif t in POSTFIX_OPS or Op.is_prefix(t):
+            elif Op.is_postfix(t) or Op.is_prefix(t):
                 if depth < 1:
                     raise ValueError(f"Не хватает операнда для «{t}»")
             elif Op.is_binary(t):
                 if depth < 2:
-                    raise ValueError(f"Не хватает операндов для «{t}»")
+                    raise ValueError(f"Не хватает операндов для бинарного оператора «{t}»")
                 depth -= 1
+        
         if depth != 1:
             raise ValueError("Выражение не сводится к одному значению")
-
+        
         return ' '.join(output)
 
 def interactive():
-
     print("\n=== Инфикс → RPN === Введите 'exit' для выхода ===\n")
     while True:
         expr = input("> ").strip()
@@ -236,7 +240,5 @@ def interactive():
         except Exception as e:
             print(f"Ошибка: {e}")
 
-
 if __name__ == "__main__":
-
     interactive()
