@@ -1,223 +1,214 @@
-from collections import deque
-import operator
-import math
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy import stats
+from sklearn.metrics import r2_score
 
+# ============================================================
+# 1. ЗАГРУЗКА ДАННЫХ ИЗ EXCEL
+# ============================================================
+# Укажите путь к вашему файлу и названия столбцов
+file_path = "данные.xlsx"   # измените на свой путь
+df = pd.read_excel(file_path)
 
-class Operator:
-    def __init__(self, symbol, precedence, arity, func):
-        self.symbol = symbol
-        self.precedence = precedence
-        self.arity = arity
-        self.func = func
+# Предположим, что столбцы называются 'X' и 'Y'
+# Если названия другие, поменяйте здесь
+X = df['X'].values
+Y = df['Y'].values
 
+n = len(X)
 
-class RPNConverter:
-    def __init__(self):
-        self.output = []
-        self.stack = deque()
-        self.operand_count = 0
+print("=" * 60)
+print("ИСХОДНЫЕ ДАННЫЕ")
+print("=" * 60)
+print(df.to_string(index=False))
+print(f"\nКоличество наблюдений: n = {n}")
+print(f"Среднее X: {np.mean(X):.4f}")
+print(f"Среднее Y: {np.mean(Y):.4f}")
 
-        self.operators = {
-            '+': Operator('+', 1, 'binary', operator.add),
-            '-': Operator('-', 1, 'binary', operator.sub),
-            '*': Operator('*', 2, 'binary', operator.mul),
-            '/': Operator('/', 2, 'binary', operator.truediv),
-            '^': Operator('^', 3, 'binary', operator.pow),
-            'tg': Operator('tg', 4, 'unary', math.tan),
-            'sin': Operator('sin', 4, 'unary', math.sin),
-            'cos': Operator('cos', 4, 'unary', math.cos),
-            '!': Operator('!', 4, 'unary', math.factorial),
-            '++': Operator('++', 4, 'unary', lambda x: x + 1),
-            '--': Operator('--', 4, 'unary', lambda x: x - 1),
-        }
+# ============================================================
+# 2. ПОЛЕ КОРРЕЛЯЦИИ
+# ============================================================
+plt.figure(figsize=(8, 5))
+plt.scatter(X, Y, color='blue', edgecolors='black', s=80)
+plt.title('Поле корреляции', fontsize=14)
+plt.xlabel('Фактор X', fontsize=12)
+plt.ylabel('Результат Y', fontsize=12)
+plt.grid(True, linestyle='--', alpha=0.6)
+plt.tight_layout()
+plt.show()
 
-    def tokenize(self, expression):
-        """Разбивает выражение на токены по пробелам и проверяет их валидность"""
-        tokens = expression.split()
-        valid_tokens = set(self.operators.keys()) | {'(', ')'}
+# Гипотеза о форме связи (будет выведена после расчётов)
+# ============================================================
 
-        for token in tokens:
-            try:
-                float(token)
-                continue
-            except ValueError:
-                pass
+# ============================================================
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# ============================================================
+def print_regression_stats(x, y, model_name, params, y_pred):
+    """
+    Выводит все статистики для заданной модели
+    """
+    n = len(y)
+    y_mean = np.mean(y)
+    
+    # Коэффициент детерминации R^2
+    ss_res = np.sum((y - y_pred) ** 2)
+    ss_tot = np.sum((y - y_mean) ** 2)
+    r2 = 1 - ss_res / ss_tot
+    r = np.sqrt(r2) if np.corrcoef(x, y)[0, 1] > 0 else -np.sqrt(r2)
+    
+    # Скорректированный R^2
+    r2_adj = 1 - (1 - r2) * (n - 1) / (n - 2)
+    
+    # Стандартная ошибка регрессии
+    se_reg = np.sqrt(ss_res / (n - 2))
+    
+    # Коэффициент эластичности
+    if len(params) >= 2:
+        if 'линейная' in model_name or 'гиперболическая' in model_name:
+            b = params[1] if len(params) > 1 else params[0]
+            elasticity = b * np.mean(x) / np.mean(y)
+        elif 'степенная' in model_name:
+            # y = a * x^b -> эластичность = b (константа)
+            elasticity = params[1]
+        elif 'показательная' in model_name:
+            # y = a * e^(b*x) -> эластичность = b * x_mean
+            elasticity = params[1] * np.mean(x)
+        else:
+            elasticity = None
+    else:
+        elasticity = None
+    
+    # t-статистики для параметров (упрощённо)
+    # Для простоты выводим только значимость модели через F-критерий
+    f_stat = (r2 / (1 - r2)) * (n - 2)
+    from scipy.stats import f
+    p_value_f = 1 - f.cdf(f_stat, 1, n - 2)
+    
+    print("\n" + "=" * 60)
+    print(f"МОДЕЛЬ: {model_name}")
+    print("=" * 60)
+    if 'линейная' in model_name and len(params) == 2:
+        print(f"Уравнение: y = {params[0]:.4f} + {params[1]:.4f} * x")
+    elif 'гиперболическая' in model_name and len(params) == 2:
+        print(f"Уравнение: y = {params[0]:.4f} + {params[1]:.4f} / x")
+    elif 'степенная' in model_name and len(params) == 2:
+        print(f"Уравнение: y = {params[0]:.4f} * x^{params[1]:.4f}")
+    elif 'показательная' in model_name and len(params) == 2:
+        print(f"Уравнение: y = {params[0]:.4f} * e^{params[1]:.4f} * x")
+    
+    print(f"\nКоэффициент корреляции r = {r:.4f}")
+    print(f"Коэффициент детерминации R² = {r2:.4f}")
+    print(f"Скорректированный R²_adj = {r2_adj:.4f}")
+    print(f"Стандартная ошибка регрессии = {se_reg:.4f}")
+    if elasticity is not None:
+        print(f"Коэффициент эластичности (средний) = {elasticity:.4f}")
+    
+    print(f"\nF-статистика Фишера = {f_stat:.4f}")
+    print(f"p-value (F-критерий) = {p_value_f:.6f}")
+    if p_value_f < 0.05:
+        print("  → Модель статистически значима (p < 0.05)")
+    else:
+        print("  → Модель статистически не значима (p >= 0.05)")
+    
+    return {'model': model_name, 'R2': r2, 'R2_adj': r2_adj, 
+            'F_stat': f_stat, 'p_value': p_value_f, 
+            'elasticity': elasticity, 'se': se_reg}
 
-            if token.isalnum() and token not in self.operators:
-                continue
+# ============================================================
+# 3. ЛИНЕЙНАЯ МОДЕЛЬ
+# ============================================================
+from scipy.stats import linregress
+slope, intercept, r_value, p_value, std_err = linregress(X, Y)
+y_pred_lin = intercept + slope * X
+params_lin = [intercept, slope]
+stats_lin = print_regression_stats(X, Y, "1. Линейная регрессия", params_lin, y_pred_lin)
 
-            if token in valid_tokens:
-                continue
+# ============================================================
+# 4. ГИПЕРБОЛИЧЕСКАЯ МОДЕЛЬ  y = a + b / x
+# ============================================================
+X_inv = 1 / X
+slope_inv, intercept_inv, _, _, _ = linregress(X_inv, Y)
+y_pred_hyp = intercept_inv + slope_inv * X_inv
+params_hyp = [intercept_inv, slope_inv]
+stats_hyp = print_regression_stats(X, Y, "2. Гиперболическая регрессия (y = a + b/x)", params_hyp, y_pred_hyp)
 
-            raise ValueError(f"Ошибка токенизации: неизвестный токен '{token}'")
+# ============================================================
+# 5. СТЕПЕННАЯ МОДЕЛЬ  y = a * x^b  (логарифмирование)
+# ============================================================
+# Избавляемся от нулей и отрицательных (для примера)
+if np.all(X > 0) and np.all(Y > 0):
+    logX = np.log(X)
+    logY = np.log(Y)
+    slope_log, intercept_log, _, _, _ = linregress(logX, logY)
+    a_power = np.exp(intercept_log)
+    b_power = slope_log
+    y_pred_power = a_power * (X ** b_power)
+    params_power = [a_power, b_power]
+    stats_power = print_regression_stats(X, Y, "3. Степенная регрессия (y = a * x^b)", params_power, y_pred_power)
+else:
+    print("\nВНИМАНИЕ: Степенная модель не применима (есть нули или отрицательные значения).")
+    stats_power = {'R2': -np.inf}
 
-        return tokens
+# ============================================================
+# 6. ПОКАЗАТЕЛЬНАЯ МОДЕЛЬ  y = a * e^(b*x)
+# ============================================================
+if np.all(Y > 0):
+    logY_exp = np.log(Y)
+    slope_exp, intercept_exp, _, _, _ = linregress(X, logY_exp)
+    a_exp = np.exp(intercept_exp)
+    b_exp = slope_exp
+    y_pred_exp = a_exp * np.exp(b_exp * X)
+    params_exp = [a_exp, b_exp]
+    stats_exp = print_regression_stats(X, Y, "4. Показательная регрессия (y = a * e^(b*x))", params_exp, y_pred_exp)
+else:
+    print("\nВНИМАНИЕ: Показательная модель не применима (Y <= 0).")
+    stats_exp = {'R2': -np.inf}
 
-    def is_operator(self, token):
-        return token in self.operators
+# ============================================================
+# 7. ВЫБОР ЛУЧШЕЙ МОДЕЛИ ПО R^2
+# ============================================================
+models_list = [stats_lin, stats_hyp, stats_power, stats_exp]
+best_model = max(models_list, key=lambda x: x['R2'] if x['R2'] != -np.inf else -np.inf)
 
-    def get_arity(self, token):
-        return self.operators[token].arity
+print("\n" + "=" * 60)
+print("ВЫБОР ЛУЧШЕГО УРАВНЕНИЯ РЕГРЕССИИ")
+print("=" * 60)
+print(f"Лучшая модель: {best_model['model']}")
+print(f"Максимальный R² = {best_model['R2']:.4f}")
+print(f"Скорректированный R²_adj = {best_model['R2_adj']:.4f}")
+print(f"F-статистика = {best_model['F_stat']:.4f}")
 
-    def check_operand_count(self, required, operation_type):
-        if self.operand_count < required:
-            raise ValueError(
-                f"Ошибка в расчете выражения: недостаточно операндов для {operation_type} операции. "
-                f"Требуется {required}, доступно {self.operand_count}"
-            )
+# ============================================================
+# 8. ПРОГНОЗ ПО ЛУЧШЕЙ МОДЕЛИ
+# ============================================================
+x_mean = np.mean(X)
+x_pred = x_mean * 1.15   # увеличение на 15%
 
-    def shunting_yard(self, expression):
-        tokens = self.tokenize(expression)
-        
-        self.output = []
-        self.stack = deque()
-        self.operand_count = 0
-        last_was_operand = False  # Флаг для проверки двух операндов подряд
-        
-        for i, token in enumerate(tokens):
-            # Проверка: является ли токен операндом (число)
-            try:
-                float(token)
-                # ПРОВЕРКА: два операнда подряд
-                if last_was_operand:
-                    raise ValueError(
-                        f"Ошибка: два операнда подряд. Предыдущий операнд: {tokens[i-1]}, "
-                        f"текущий операнд: {token}"
-                    )
-                self.output.append(token)
-                self.operand_count += 1
-                last_was_operand = True
-                continue
-            except ValueError:
-                pass
-            
-            # Проверка: переменная
-            if token.isalnum() and token not in self.operators:
-                # ПРОВЕРКА: два операнда подряд
-                if last_was_operand:
-                    raise ValueError(
-                        f"Ошибка: два операнда подряд. Предыдущий операнд: {tokens[i-1]}, "
-                        f"текущая переменная: {token}"
-                    )
-                self.output.append(token)
-                self.operand_count += 1
-                last_was_operand = True
-                continue
-            
-            # Левая скобка
-            if token == '(':
-                self.stack.append(token)
-                # Скобка не меняет last_was_operand
-                continue
-            
-            # Правая скобка
-            if token == ')':
-                while self.stack and self.stack[-1] != '(':
-                    popped = self.stack.pop()
-                    self.output.append(popped)
-                    
-                    arity = self.get_arity(popped)
-                    if arity == 'binary':
-                        self.check_operand_count(2, "бинарной")
-                        self.operand_count -= 1
-                        last_was_operand = False
-                    elif arity == 'unary':
-                        self.check_operand_count(1, "унарной")
-                        # Унарный не сбрасывает last_was_operand
-                
-                if self.stack and self.stack[-1] == '(':
-                    self.stack.pop()
-                else:
-                    raise ValueError("Ошибка: несогласованные скобки")
-                continue
-            
-            # Если токен - оператор
-            if self.is_operator(token):
-                op = self.operators[token]
-                
-                while (self.stack and self.stack[-1] != '(' and
-                       self.is_operator(self.stack[-1])):
-                    top_op = self.operators[self.stack[-1]]
-                    if top_op.precedence > op.precedence:
-                        popped = self.stack.pop()
-                        self.output.append(popped)
-                        
-                        if top_op.arity == 'binary':
-                            self.check_operand_count(2, "бинарной")
-                            self.operand_count -= 1
-                            last_was_operand = False
-                        elif top_op.arity == 'unary':
-                            self.check_operand_count(1, "унарной")
-                            # Унарный не сбрасывает
-                    else:
-                        break
-                
-                self.stack.append(token)
-                # КЛЮЧЕВОЙ МОМЕНТ: для бинарного оператора сбрасываем флаг
-                if op.arity == 'binary':
-                    last_was_operand = False
-                # Для унарного НЕ сбрасываем last_was_operand
-                continue
-            
-            raise ValueError(f"Ошибка: неизвестный токен '{token}'")
-        
-        # Выталкиваем оставшиеся операторы
-        while self.stack:
-            if self.stack[-1] == '(' or self.stack[-1] == ')':
-                raise ValueError("Ошибка: несогласованные скобки")
-            
-            popped = self.stack.pop()
-            self.output.append(popped)
-            
-            arity = self.get_arity(popped)
-            if arity == 'binary':
-                self.check_operand_count(2, "бинарной")
-                self.operand_count -= 1
-                last_was_operand = False
-            elif arity == 'unary':
-                self.check_operand_count(1, "унарной")
-                # Унарный не сбрасывает
-        
-        if self.operand_count != 1:
-            raise ValueError(
-                f"Ошибка в расчете выражения: некорректное количество операндов. "
-                f"Ожидается 1, получено {self.operand_count}"
-            )
-        
-        return ' '.join(self.output)
+print("\n" + "=" * 60)
+print("ПРОГНОЗ ПО ЛУЧШЕЙ МОДЕЛИ")
+print("=" * 60)
+print(f"Среднее значение фактора X̄ = {x_mean:.4f}")
+print(f"Прогнозное значение X_прогноз = {x_pred:.4f} (+15% от среднего)")
 
+if best_model['model'] == "1. Линейная регрессия":
+    y_pred_future = intercept + slope * x_pred
+    print(f"Уравнение: y = {intercept:.4f} + {slope:.4f} * x")
+    print(f"Прогноз Y = {y_pred_future:.4f}")
 
-def main():
-    converter = RPNConverter()
-    print("Калькулятор обратной польской нотации (RPN)")
-    print("Вводите выражения через пробел (например: ( 5 + 3 ) * 2 )")
-    print("Для выхода введите 'stop'")
-    print("-" * 50)
+elif best_model['model'] == "2. Гиперболическая регрессия (y = a + b/x)":
+    y_pred_future = intercept_inv + slope_inv / x_pred
+    print(f"Уравнение: y = {intercept_inv:.4f} + {slope_inv:.4f} / x")
+    print(f"Прогноз Y = {y_pred_future:.4f}")
 
-    while True:
-        try:
-            expr = input("Введите выражение: ").strip()
+elif best_model['model'] == "3. Степенная регрессия (y = a * x^b)":
+    y_pred_future = a_power * (x_pred ** b_power)
+    print(f"Уравнение: y = {a_power:.4f} * x^{b_power:.4f}")
+    print(f"Прогноз Y = {y_pred_future:.4f}")
 
-            if expr.lower() == 'stop':
-                print("Программа завершена.")
-                break
+elif best_model['model'] == "4. Показательная регрессия (y = a * e^(b*x))":
+    y_pred_future = a_exp * np.exp(b_exp * x_pred)
+    print(f"Уравнение: y = {a_exp:.4f} * e^{b_exp:.4f} * x")
+    print(f"Прогноз Y = {y_pred_future:.4f}")
 
-            if not expr:
-                print("Пустая строка. Попробуйте снова.")
-                continue
-
-            rpn = converter.shunting_yard(expr)
-            print(f"RPN: {rpn}")
-            print("✓ Выражение корректно!")
-            print("-" * 50)
-
-        except ValueError as e:
-            print(f"✗ {e}")
-            print("-" * 50)
-        except Exception as e:
-            print(f"✗ Непредвиденная ошибка: {e}")
-            print("-" * 50)
-
-
-if __name__ == "__main__":
-    main()
+print("\n" + "=" * 60)
