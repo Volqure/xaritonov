@@ -1,0 +1,38 @@
+# Перенаправление HTTP на HTTPS
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+    return 301 https://$host$request_uri;
+}
+
+# HTTPS сервер
+server {
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
+
+    ssl_certificate /etc/letsencrypt/live/ВАШ-ДОМЕН/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/ВАШ-ДОМЕН/privkey.pem;
+
+    root /var/www/html;
+    index index.html index.php;
+
+    error_page 404 /404.html;
+    location = /404.html {
+        root /var/www/html;
+        internal;
+    }
+
+    location /phpmyadmin {
+        root /var/www/html;
+        index index.php index.html;
+
+        allow 217.74.114.99;
+        deny all;
+
+        location ~ \.php$ {
+            include snippets/fastcgi-php.conf;
+            fastcgi_pass unix:/run/php/php7.4-fpm.sock;
+        }
+    }
+}
